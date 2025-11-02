@@ -227,3 +227,36 @@ void wifi_mqtt_deinit(void) {
     cyw43_arch_deinit();
     mqtt_connected = false;
 }
+
+bool mqtt_publish_sensors(float ultrasonic_cm, uint16_t ir_line_raw,bool on_line) {
+    if (!mqtt_connected) return false;
+    char buffer[128];
+    int len = snprintf(buffer, sizeof(buffer),
+        "{\"ultrasonic\":%.2f,\"ir_line\":%u,\"on_line\":%d}",
+        ultrasonic_cm, ir_line_raw, on_line ? 1 : 0);
+    
+    if (len < 0 || len >= sizeof(buffer)) return false;
+    
+    err_t err = mqtt_publish(mqtt_client, 
+                            "robot/sensors", 
+                            buffer, (u16_t)len, 
+                            0, 0, mqtt_pub_request_cb, NULL);
+    return (err == ERR_OK);
+}
+bool mqtt_publish_barcode(const char* barcode_value, 
+                          uint8_t bar_count) {
+    if (!mqtt_connected) return false;
+    
+    char buffer[128];
+    int len = snprintf(buffer, sizeof(buffer),
+        "{\"barcode\":\"%s\",\"bars\":%u}",
+        barcode_value, bar_count);
+    
+    if (len < 0 || len >= sizeof(buffer)) return false;
+    
+    err_t err = mqtt_publish(mqtt_client, 
+                            "robot/barcode", 
+                            buffer, (u16_t)len, 
+                            0, 0, mqtt_pub_request_cb, NULL);
+    return (err == ERR_OK);
+}

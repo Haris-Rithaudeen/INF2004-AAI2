@@ -183,6 +183,23 @@ void fsm_step(void) {
             mag_data.heading,
             mag_data.x, mag_data.y, mag_data.z
         );
+        // Publish ultrasonic + IR line sensor data
+        uint16_t line_raw = ir_line_read_adc_raw();
+        bool on_line = ir_line_is_on_line();
+        mqtt_publish_sensors(
+            obstacle_distance,  // Already measured above
+            line_raw,
+            on_line
+        );
+        
+        // Publish barcode data if available
+        barcode_data_t* barcode = ir_barcode_get_data();
+        if (barcode->scan_complete && barcode->bar_count > 0) {
+            mqtt_publish_barcode(
+                barcode->decoded_value,
+                barcode->bar_count
+            );
+        }
         
         last_mqtt_publish_ms = now_ms;
     }

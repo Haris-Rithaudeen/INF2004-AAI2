@@ -42,6 +42,8 @@ bool mqtt_publish_telemetry(float left_speed, float right_speed,
                             float heading, int16_t accel_x, 
                             int16_t accel_y, int16_t accel_z);
 bool mqtt_publish_ping(int count);
+bool mqtt_publish_sensors(float ultrasonic_cm, uint16_t ir_line_raw, bool on_line);
+bool mqtt_publish_barcode(const char* barcode_value, uint8_t bar_count);
 void wifi_mqtt_poll(void);
 void wifi_mqtt_deinit(void);
 
