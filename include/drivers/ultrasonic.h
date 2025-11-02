@@ -24,4 +24,15 @@ float ultrasonic_measure_averaged_cm(int samples);
 // Print ultrasonic sensor data
 void ultrasonic_print_data(void);
 
+// Scan for obstacle edges (used with servo)
+// Returns width estimate in cm (distance between clear sides)
+typedef struct {
+    float left_distance_cm;
+    float center_distance_cm;
+    float right_distance_cm;
+    bool left_clear;
+    bool right_clear;
+    float estimated_width_cm;
+} obstacle_scan_t;
+
 #endif

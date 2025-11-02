@@ -57,6 +57,7 @@ add_executable(INF2004-AAI2
     src/drivers/ir_line_follower.c
     src/drivers/ir_barcode_scanner.c
     src/drivers/ultrasonic.c
+    src/drivers/servo.c
     src/drivers/magnetometer.c
     src/networking/wifi_mqtt.c
 )

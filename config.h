@@ -41,6 +41,9 @@
 #define ULTRASONIC_TRIG_GPIO          5
 #define ULTRASONIC_ECHO_GPIO          4
 
+// ==== Servo Motor ====
+#define SERVO_GPIO                    15
+
 // ==== I2C Magnetometer/Accelerometer (LSM303) ====
 #define I2C_PORT                i2c1
 #define I2C_SDA_PIN             2
