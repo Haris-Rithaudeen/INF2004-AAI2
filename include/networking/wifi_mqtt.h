@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 // Try to include credentials file, otherwise use defaults
 #ifdef USE_WIFI_CREDENTIALS_FILE
@@ -32,17 +33,48 @@
 #define MQTT_PING_INTERVAL_MS   3000
 #define MQTT_MAX_RECONNECT      3
 
-// Function declarations...
+
+// -----------------------------
+// Public API
+// -----------------------------
+
+// Init Wi-Fi station mode and lwIP/CYW43
 bool wifi_mqtt_init(void);
+
+// Connect to Wi-Fi (blocking with timeout)
 bool wifi_mqtt_connect(void);
+
+// Connect (or reconnect) to MQTT broker; returns true when connected
 bool mqtt_connect_broker(void);
-bool mqtt_is_connected(void);
-bool mqtt_publish_telemetry(float left_speed, float right_speed, 
-                            float left_dist, float right_dist,
-                            float heading, int16_t accel_x, 
-                            int16_t accel_y, int16_t accel_z);
-bool mqtt_publish_ping(int count);
+
+// Poll lwIP/CYW43 + reconnect logic (call frequently in main loop)
 void wifi_mqtt_poll(void);
+
+// Graceful cleanup
 void wifi_mqtt_deinit(void);
+
+// Connection state
+bool mqtt_is_connected(void);
+
+// --------- Publish helpers ---------
+bool mqtt_publish_telemetry(float left_speed, float right_speed,
+                            float left_dist,  float right_dist,
+                            float heading,    int16_t accel_x,
+                            int16_t accel_y,  int16_t accel_z);
+
+// Simple “PING #n” demo publisher
+bool mqtt_publish_ping(int count);
+
+// General text/bytes publishers
+bool mqtt_publish_text(const char *topic, const char *text, int qos, bool retain);
+bool mqtt_publish_raw (const char *topic, const uint8_t *bytes, size_t len, int qos, bool retain);
+
+// --------- Subscribe helpers ---------
+bool mqtt_subscribe_topic(const char *topic, int qos);
+
+// User message callback: called after a full MQTT payload is received
+typedef void (*mqtt_msg_cb_t)(const char *topic, const uint8_t *payload, size_t len);
+void mqtt_set_message_cb(mqtt_msg_cb_t cb);
+
 
 #endif

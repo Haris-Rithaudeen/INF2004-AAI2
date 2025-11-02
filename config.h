@@ -58,11 +58,25 @@
 #define PWM_WRAP                4095
 #define STALL_PWM_THRESHOLD     0.50f
 #define STALL_WINDOW_MS         200
+#define ENCODER_COUNT_BOTH_EDGES 0
 
 // ===== Line Follower IR config =====
-#define IR_LINE_WHITE_HIGH           0
-#define IR_LINE_THRESHOLD            2000
+#define IR_LINE_WHITE_HIGH           0       // 0 = white reads low, black reads high
+#define IR_LINE_THRESHOLD            ((IR_LINE_EDGE_LOW_LIMIT + IR_LINE_EDGE_HIGH_LIMIT) / 2.0f)    // Middle of your range (1500+2300)/2
 #define IR_LINE_PRINT_INTERVAL_MS    500
+#define IR_LINE_EDGE_LOW_LIMIT       1000
+#define IR_LINE_EDGE_HIGH_LIMIT      2100
+
+// ===== Line Following PID Tuning =====
+// Smoother tuning for circular tracks
+#define LINE_FOLLOW_KP          0.0045f    // Proportional - responsive but smooth
+#define LINE_FOLLOW_KI          0.0001f   // Very low integral - prevents overshoot on curves
+#define LINE_FOLLOW_KD          0.030f    // Higher derivative - smoother on curves
+#define LINE_CORRECTION_MAX     10.0f     // Max steering correction
+
+// Smoothing for sensor readings (helps with circular tracks)
+#define IR_SENSOR_FILTER_ALPHA  0.15f      // Lower = smoother (0.1-0.5 range)
+
 
 // ===== Barcode Scanner IR config =====
 #define IR_BARCODE_WHITE_HIGH        0
@@ -79,32 +93,43 @@
 
 // ===== Magnetometer config =====
 #define MAG_PRINT_INTERVAL_MS           500
-#define MAG_FILTER_SIZE                 10    // Increased for smoother readings
+#define MAG_FILTER_SIZE                 10
+
+//==== Tuning Parameters for Precise Turning =====
+// Accuracy thresholds
+#define HEADING_TOLERANCE       5.0f        // Final acceptable error (don't change - this is your requirement)
+#define HEADING_SETTLE_TOLERANCE 2.0f       // Must be within this to start holding (lower = more precise, but may oscillate)
+
+// Speed control
+#define MIN_TURN_SPEED          15.0f       // Minimum PWM % - increase if robot doesn't move smoothly at low speeds
+#define MAX_TURN_SPEED          25.0f       // Maximum PWM % - decrease if overshooting, increase if too slow
+#define APPROACH_THRESHOLD      20.0f       // Start slowing down when this many degrees from target (higher = smoother but slower)
+
+// Timing
+#define HOLD_TIME_MS            300         // How long to hold position before confirming (increase if drifting after "complete")
+#define TURN_TIMEOUT_MS         4000       // Safety timeout (15 seconds)
+#define PRINT_INTERVAL_MS       100          // Status print rate
 
 // ===== Motor Deadband Compensation =====
-#define MOTOR_DEADBAND_PERCENT     8.0f   // Minimum PWM to overcome friction
+#define MOTOR_DEADBAND_PERCENT     8.0f
 
 // ===== Motor Characterization (PER WHEEL) =====
-// Left motor (adjust these based on testing)
-#define MOTOR_L_MIN_PWM      18.0f    // Minimum PWM to start moving
-#define MOTOR_L_MAX_PWM      35.0f    // PWM at max speed - tune this!
+#define MOTOR_L_MIN_PWM      18.0f
+#define MOTOR_L_MAX_PWM      35.0f
 
-// Right motor (adjust these based on testing)
-#define MOTOR_R_MIN_PWM      18.0f    // Minimum PWM to start moving
-#define MOTOR_R_MAX_PWM      35.0f    // PWM at max speed - tune this!
+#define MOTOR_R_MIN_PWM      18.0f
+#define MOTOR_R_MAX_PWM      35.0f
 
 // ===== PID Gains (PER WHEEL) =====
 #define SPEED_MAX_MM_S             350.0f
 
-// Left wheel PID gains
-#define PID_L_KP             0.3f     // Start with P-only
-#define PID_L_KI             0.01f     // Add after Kp is tuned
-#define PID_L_KD             0.0f     // Usually not needed
+#define PID_L_KP             0.3f
+#define PID_L_KI             0.01f
+#define PID_L_KD             0.0f
 
-// Right wheel PID gains
-#define PID_R_KP             0.35f     // Start with P-only
-#define PID_R_KI             0.01f     // Add after Kp is tuned
-#define PID_R_KD             0.0f     // Usually not needed
+#define PID_R_KP             0.35f
+#define PID_R_KI             0.01f
+#define PID_R_KD             0.0f
 
 // PID output limits (same for both)
 #define PID_OUT_MIN         (-40.0f)
@@ -113,9 +138,8 @@
 #define PID_INTEG_MAX        (5.0f)
 
 // ===== IMU Heading Correction =====
-// These control how aggressively the robot corrects its heading to drive straight
-#define HEADING_KP                2.5f     // Increased for stronger correction
-#define HEADING_KI                0.4f    // Increased slightly
-#define HEADING_KD                0.5f     // Increased damping
-#define HEADING_DEADZONE          1.0f     // Keep sensitive
-#define MAX_HEADING_CORRECTION   30.0f    // Increased max correction
+#define HEADING_KP                2.5f
+#define HEADING_KI                0.4f
+#define HEADING_KD                0.5f
+#define HEADING_DEADZONE          1.0f
+#define MAX_HEADING_CORRECTION   30.0f
