@@ -26,6 +26,14 @@ static int16_t mag_min_y = 32767, mag_max_y = -32768;
 static int16_t mag_min_z = 32767, mag_max_z = -32768;
 static bool calibration_active = false;
 
+// Moving average filter buffers
+static int16_t filter_x[MAG_FILTER_SIZE] = {0};
+static int16_t filter_y[MAG_FILTER_SIZE] = {0};
+static int16_t filter_z[MAG_FILTER_SIZE] = {0};
+static uint8_t filter_index = 0;
+static uint8_t filter_count = 0;  // Tracks how many samples we've collected
+static bool filter_initialized = false;
+
 // Write to magnetometer register
 static bool mag_write(uint8_t reg, uint8_t val) {
     uint8_t buf[2] = {reg, val};
@@ -41,6 +49,37 @@ static bool mag_read(uint8_t reg, uint8_t *dst, size_t n) {
     }
     // Read data
     return (i2c_read_blocking(I2C_PORT, LSM303_MAG_ADDR, dst, n, false) == (int)n);
+}
+
+// Apply moving average filter to the raw data
+static void apply_moving_average(int16_t raw_x, int16_t raw_y, int16_t raw_z,
+                                  int16_t *smooth_x, int16_t *smooth_y, int16_t *smooth_z) {
+    // Add new sample to circular buffer
+    filter_x[filter_index] = raw_x;
+    filter_y[filter_index] = raw_y;
+    filter_z[filter_index] = raw_z;
+    
+    // Increment index and wrap around
+    filter_index = (filter_index + 1) % MAG_FILTER_SIZE;
+    
+    // Track how many samples we have (up to MAG_FILTER_SIZE)
+    if (filter_count < MAG_FILTER_SIZE) {
+        filter_count++;
+    }
+    
+    // Calculate average of all samples in buffer
+    int32_t sum_x = 0, sum_y = 0, sum_z = 0;
+    for (uint8_t i = 0; i < filter_count; i++) {
+        sum_x += filter_x[i];
+        sum_y += filter_y[i];
+        sum_z += filter_z[i];
+    }
+    
+    *smooth_x = (int16_t)(sum_x / filter_count);
+    *smooth_y = (int16_t)(sum_y / filter_count);
+    *smooth_z = (int16_t)(sum_z / filter_count);
+    
+    filter_initialized = true;
 }
 
 bool magnetometer_init(void) {
@@ -86,10 +125,25 @@ bool magnetometer_init(void) {
 
     sleep_ms(10);
 
+    // Reset the moving average filter
+    magnetometer_reset_filter();
+
     printf("Magnetometer initialized: I2C%d, SDA=GP%d, SCL=GP%d\n",
            i2c_hw_index(I2C_PORT), I2C_SDA_PIN, I2C_SCL_PIN);
+    printf("Moving average filter: %d samples\n", MAG_FILTER_SIZE);
 
     return true;
+}
+
+void magnetometer_reset_filter(void) {
+    for (uint8_t i = 0; i < MAG_FILTER_SIZE; i++) {
+        filter_x[i] = 0;
+        filter_y[i] = 0;
+        filter_z[i] = 0;
+    }
+    filter_index = 0;
+    filter_count = 0;
+    filter_initialized = false;
 }
 
 bool magnetometer_read_raw(int16_t *mx, int16_t *my, int16_t *mz) {
@@ -120,6 +174,28 @@ bool magnetometer_read_raw(int16_t *mx, int16_t *my, int16_t *mz) {
 bool magnetometer_read_data(magnetometer_data_t *data) {
     if (data == NULL) return false;
 
+    // Read raw values
+    int16_t raw_x, raw_y, raw_z;
+    if (!magnetometer_read_raw(&raw_x, &raw_y, &raw_z)) {
+        return false;
+    }
+
+    // Apply moving average filter
+    int16_t smooth_x, smooth_y, smooth_z;
+    apply_moving_average(raw_x, raw_y, raw_z, &smooth_x, &smooth_y, &smooth_z);
+
+    // Store smoothed values
+    data->x = smooth_x;
+    data->y = smooth_y;
+    data->z = smooth_z;
+    data->heading = magnetometer_calculate_heading(smooth_x, smooth_y);
+    
+    return true;
+}
+
+bool magnetometer_read_data_raw(magnetometer_data_t *data) {
+    if (data == NULL) return false;
+
     if (!magnetometer_read_raw(&data->x, &data->y, &data->z)) {
         return false;
     }
@@ -148,6 +224,14 @@ float magnetometer_calculate_heading(int16_t mx, int16_t my) {
 }
 
 float magnetometer_get_heading(void) {
+    magnetometer_data_t data;
+    if (magnetometer_read_data(&data)) {
+        return data.heading;
+    }
+    return NAN;
+}
+
+float magnetometer_get_heading_raw(void) {
     int16_t mx, my, mz;
     if (magnetometer_read_raw(&mx, &my, &mz)) {
         return magnetometer_calculate_heading(mx, my);

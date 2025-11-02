@@ -4,10 +4,6 @@
 #include "config.h"
 #include "drivers/encoder.h"
 
-#ifndef ENCODER_COUNT_BOTH_EDGES
-#define ENCODER_COUNT_BOTH_EDGES 0
-#endif
-
 static volatile uint32_t g_left_ticks  = 0;
 static volatile uint32_t g_right_ticks = 0;
 

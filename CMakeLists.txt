@@ -53,6 +53,7 @@ add_executable(INF2004-AAI2
     src/fsm.c
     src/drivers/motor.c
     src/drivers/encoder.c
+    src/control/pid.c
     src/drivers/ir_line_follower.c
     src/drivers/ir_barcode_scanner.c
     src/drivers/ultrasonic.c

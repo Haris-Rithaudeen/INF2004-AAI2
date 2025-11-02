@@ -7,8 +7,9 @@
 #include "fsm.h"
 
 // Minimal FSM to test ONLY the Magnetometer (LSM303) extracted from combfsm.c
-// - Initializes I2C + magnetometer
+// - Initializes I2C + magnetometer with SMOOTH MOVING AVERAGE filter
 // - Periodically reads raw XYZ and heading, and prints them
+// - Shows both FILTERED (smooth) and RAW (unfiltered) readings for comparison
 // - No motors, no encoders, no IR, no ultrasonic, no WiFi/MQTT
 
 static uint32_t last_print_ms = 0;
@@ -22,11 +23,13 @@ void fsm_init(void) {
 
     // Initialize magnetometer (LSM303)
     if (magnetometer_init()) {
-        printf("\n=== COMBFSM: MAGNETOMETER-ONLY TEST MODE ===\n");
+        printf("\n=== COMBFSM: MAGNETOMETER TEST MODE (WITH SMOOTH MOVING AVERAGE) ===\n");
         printf("I2C: SDA=GP%d, SCL=GP%d, LSM303_MAG_ADDR=0x%02X\n",
                I2C_SDA_PIN, I2C_SCL_PIN, LSM303_MAG_ADDR);
         printf("Print interval: %d ms\n", MAG_PRINT_INTERVAL_MS);
+        printf("Filter size: %d samples (moving average)\n", MAG_FILTER_SIZE);
         printf("Rotate the board slowly to see heading change (0°=N, 90°=E, 180°=S, 270°=W)\n");
+        printf("First %d readings will show partial averaging as filter fills up\n\n", MAG_FILTER_SIZE);
     } else {
         printf("[MAG] Initialization FAILED. Check wiring and I2C pins in config.h\n");
     }
@@ -35,11 +38,21 @@ void fsm_init(void) {
 void fsm_step(void) {
     uint32_t t = now_ms();
     if (t - last_print_ms >= (uint32_t)MAG_PRINT_INTERVAL_MS) {
-        magnetometer_data_t d;
-        if (magnetometer_read_data(&d)) {
-            // If driver didn't set heading, compute a quick heading from X,Y
-            float heading = isnan(d.heading) || isinf(d.heading) ? magnetometer_get_heading() : d.heading;
-            printf("[MAG] raw: x=%d y=%d z=%d | heading=%.1f°\n", d.x, d.y, d.z, heading);
+        magnetometer_data_t filtered, raw;
+        
+        // Read filtered (smoothed) data
+        bool filtered_ok = magnetometer_read_data(&filtered);
+        
+        // Read raw (unfiltered) data
+        bool raw_ok = magnetometer_read_data_raw(&raw);
+        
+        if (filtered_ok && raw_ok) {
+            // Print both filtered and raw values for comparison
+            printf("[MAG SMOOTH] x=%6d y=%6d z=%6d | heading=%6.1f°", 
+                   filtered.x, filtered.y, filtered.z, filtered.heading);
+            
+            printf("  [RAW] x=%6d y=%6d z=%6d | heading=%6.1f°\n", 
+                   raw.x, raw.y, raw.z, raw.heading);
         } else {
             printf("[MAG] read failed\n");
         }
