@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous Robot Telemetry - Integration Test Platform</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <link rel="stylesheet" href="/dashboard/css/base.css">
+    <link rel="stylesheet" href="/dashboard/css/components.css">
+    <link rel="stylesheet" href="/dashboard/css/layout.css">
+</head>
+<body>
+    <!-- Navigation Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect width="32" height="32" rx="6" fill="#0066FF"/>
+                        <path d="M16 8L24 14V22L16 28L8 22V14L16 8Z" stroke="white" stroke-width="2"/>
+                    </svg>
+                    <span class="logo-text">Robot Telemetry System</span>
+                </div>
+                <nav class="nav-tabs">
+                    <button class="nav-tab active" data-view="overview">Overview</button>
+                </nav>
+            </div>
+            <div class="header-right">
+                <div class="connection-indicator">
+                    <span class="status-dot" id="connectionStatus"></span>
+                    <span class="status-label" id="connectionLabel">Connecting</span>
+                </div>
+                <div class="broker-address" id="brokerAddress">ws://localhost:9001</div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+        
+        <!-- Overview Dashboard -->
+        <div class="view active" id="overview">
+            <div class="dashboard-grid">
+                
+                <!-- System Status -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">System Status</h2>
+                        <div class="panel-actions">
+                            <span class="timestamp" id="lastUpdate">Last update: --</span>
+                        </div>
+                    </div>
+                    <div class="panel-body">
+                        <div class="status-grid">
+                            <div class="status-card">
+                                <div class="status-label">Connection</div>
+                                <div class="status-value" id="sysConnection">Offline</div>
+                            </div>
+                            <div class="status-card">
+                                <div class="status-label">Uptime</div>
+                                <div class="status-value" id="sysUptime">0s</div>
+                            </div>
+                            <div class="status-card">
+                                <div class="status-label">Messages Received</div>
+                                <div class="status-value" id="sysMessages">0</div>
+                            </div>
+                            <div class="status-card">
+                                <div class="status-label">Update Rate</div>
+                                <div class="status-value" id="sysRate">0 Hz</div>
+                            </div>
+                            <div class="status-card">
+                                <div class="status-label">Current State</div>
+                                <div class="status-value" id="sysState">IDLE</div>
+                            </div>
+                            <div class="status-card">
+                                <div class="status-label">Active Demo</div>
+                                <div class="status-value" id="sysDemo">None</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Motor Telemetry -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Motor Telemetry</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="motor-section">
+                            <div class="motor-header">Left Motor</div>
+                            <canvas id="leftMotorGauge" class="gauge-canvas"></canvas>
+                            <div class="motor-stats">
+                                <div class="stat-row">
+                                    <span class="stat-label">Speed</span>
+                                    <span class="stat-value" id="leftSpeed">0.0 cm/s</span>
+                                </div>
+                                <div class="stat-row">
+                                    <span class="stat-label">Distance</span>
+                                    <span class="stat-value" id="leftDistance">0 cm</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="motor-section">
+                            <div class="motor-header">Right Motor</div>
+                            <canvas id="rightMotorGauge" class="gauge-canvas"></canvas>
+                            <div class="motor-stats">
+                                <div class="stat-row">
+                                    <span class="stat-label">Speed</span>
+                                    <span class="stat-value" id="rightSpeed">0.0 cm/s</span>
+                                </div>
+                                <div class="stat-row">
+                                    <span class="stat-label">Distance</span>
+                                    <span class="stat-value" id="rightDistance">0 cm</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Speed History Chart -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Speed History</h2>
+                    </div>
+                    <div class="panel-body">
+                        <canvas id="speedChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Navigation & Heading -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Navigation</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="compass-container">
+                            <svg class="compass-svg" viewBox="0 0 200 200">
+                                <circle cx="100" cy="100" r="90" fill="none" stroke="#2A2F3C" stroke-width="2"/>
+                                <circle cx="100" cy="100" r="85" fill="none" stroke="#0066FF" stroke-width="1" opacity="0.3"/>
+                                <text x="100" y="20" text-anchor="middle" fill="#fff" font-size="14" font-weight="600">N</text>
+                                <text x="180" y="105" text-anchor="middle" fill="#8B92A8" font-size="12">E</text>
+                                <text x="100" y="190" text-anchor="middle" fill="#8B92A8" font-size="12">S</text>
+                                <text x="20" y="105" text-anchor="middle" fill="#8B92A8" font-size="12">W</text>
+                                <line id="compassNeedle" x1="100" y1="100" x2="100" y2="30" stroke="#0066FF" stroke-width="3" stroke-linecap="round"/>
+                            </svg>
+                            <div class="heading-display">
+                                <div class="heading-value" id="headingValue">0.0</div>
+                                <div class="heading-unit">degrees</div>
+                                <div class="heading-direction" id="headingDirection">North</div>
+                            </div>
+                        </div>
+                        <div class="mag-readings">
+                            <div class="mag-axis">
+                                <span class="axis-label">X:</span>
+                                <span class="axis-value" id="magX">0</span>
+                            </div>
+                            <div class="mag-axis">
+                                <span class="axis-label">Y:</span>
+                                <span class="axis-value" id="magY">0</span>
+                            </div>
+                            <div class="mag-axis">
+                                <span class="axis-label">Z:</span>
+                                <span class="axis-value" id="magZ">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sensor Readings -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Sensor Readings</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="sensor-item">
+                            <div class="sensor-label">Ultrasonic Distance</div>
+                            <div class="sensor-value-large" id="ultrasonicValue">-- cm</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="ultrasonicProgress"></div>
+                            </div>
+                        </div>
+                        <div class="sensor-item">
+                            <div class="sensor-label">IR Line Sensor</div>
+                            <div class="sensor-value" id="irLineValue">--</div>
+                            <div class="sensor-badge" id="lineStatus">OFF LINE</div>
+                        </div>
+                        <div class="sensor-item">
+                            <div class="sensor-label">Barcode Scanner</div>
+                            <div class="sensor-value" id="barcodeValue">No data</div>
+                            <div class="sensor-meta">Bars detected: <span id="barCount">0</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Event Log -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Event Log</h2>
+                        <button class="btn-clear" onclick="clearEventLog()">Clear</button>
+                    </div>
+                    <div class="panel-body">
+                        <div class="event-log" id="eventLog">
+                            <div class="event-item event-info">
+                                <span class="event-time">--:--:--</span>
+                                <span class="event-message">System initialized</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Demo 1: Motion Control & Sensing -->
+        <div class="view" id="demo1">
+            <div class="dashboard-grid">
+                
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Demo 1: Basic Motion & Sensing Integration</h2>
+                        <div class="demo-badge">PID Control + IMU + Telemetry</div>
+                    </div>
+                    <div class="panel-body">
+                        <p class="panel-description">Validates motor control with PID, IMU data acquisition and filtering, and basic telemetry transmission.</p>
+                    </div>
+                </div>
+
+                <!-- PID Controller -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">PID Controller</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="pid-parameters">
+                            <div class="pid-param">
+                                <div class="param-label">Kp (Proportional)</div>
+                                <div class="param-value" id="pidKp">--</div>
+                            </div>
+                            <div class="pid-param">
+                                <div class="param-label">Ki (Integral)</div>
+                                <div class="param-value" id="pidKi">--</div>
+                            </div>
+                            <div class="pid-param">
+                                <div class="param-label">Kd (Derivative)</div>
+                                <div class="param-value" id="pidKd">--</div>
+                            </div>
+                        </div>
+                        <div class="pid-status">
+                            <div class="stat-row">
+                                <span class="stat-label">Current Error</span>
+                                <span class="stat-value" id="pidError">0.00</span>
+                            </div>
+                            <div class="stat-row">
+                                <span class="stat-label">Control Output</span>
+                                <span class="stat-value" id="pidOutput">0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PID Error Chart -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">PID Error Over Time</h2>
+                    </div>
+                    <div class="panel-body">
+                        <canvas id="pidErrorChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- IMU Data Comparison -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">IMU Data: Raw vs Filtered</h2>
+                    </div>
+                    <div class="panel-body">
+                        <canvas id="imuComparisonChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Path Accuracy -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Path Accuracy Metrics</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="metric-card">
+                            <div class="metric-label">Lateral Drift</div>
+                            <div class="metric-value" id="lateralDrift">0.0 cm</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Angular Deviation</div>
+                            <div class="metric-value" id="angularDev">0.0°</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-label">Path Correction Count</div>
+                            <div class="metric-value" id="correctionCount">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success Criteria -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Success Criteria Checklist</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="checklist">
+                            <div class="checklist-item" id="check_straightPath">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Robot maintains straight path with minimal drift</span>
+                            </div>
+                            <div class="checklist-item" id="check_imuCorrection">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">IMU corrections applied successfully</span>
+                            </div>
+                            <div class="checklist-item" id="check_speedData">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Live speed and heading data available on MQTT</span>
+                            </div>
+                            <div class="checklist-item" id="check_filtering">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Filtering visibly improves IMU data stability</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Demo 2: Line Following + Barcode Navigation -->
+        <div class="view" id="demo2">
+            <div class="dashboard-grid">
+                
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Demo 2: Line Following + Barcode Navigation + Telemetry</h2>
+                        <div class="demo-badge">Perception + Decision Loop + MQTT</div>
+                    </div>
+                    <div class="panel-body">
+                        <p class="panel-description">Tests full perception and decision loop with MQTT logging for line following and barcode-based navigation.</p>
+                    </div>
+                </div>
+
+                <!-- Robot State Machine -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Robot State Machine</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="state-display">
+                            <div class="current-state" id="currentState">IDLE</div>
+                            <div class="state-time">Duration: <span id="stateDuration">0s</span></div>
+                        </div>
+                        <div class="state-transitions">
+                            <div class="transition-item" data-state="FOLLOWING_LINE">Following Line</div>
+                            <div class="transition-item" data-state="TURNING_LEFT">Turning Left</div>
+                            <div class="transition-item" data-state="TURNING_RIGHT">Turning Right</div>
+                            <div class="transition-item" data-state="STOPPED">Stopped</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Line Following Metrics -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Line Following Performance</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="line-metric">
+                            <div class="metric-label">Line Position Error</div>
+                            <div class="metric-value-large" id="lineError">0.00</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="lineErrorBar" style="background: linear-gradient(90deg, #10b981, #ef4444);"></div>
+                            </div>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Junction Count</span>
+                            <span class="stat-value" id="junctionCount">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Track Loss Events</span>
+                            <span class="stat-value" id="trackLossCount">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Barcode Commands -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Barcode Command System</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="command-display">
+                            <div class="command-label">Last Command</div>
+                            <div class="command-value" id="lastCommand">NONE</div>
+                        </div>
+                        <div class="command-history">
+                            <div class="history-header">Command History</div>
+                            <div class="history-list" id="commandHistory">
+                                <div class="history-empty">No commands received</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Movement Timeline -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Movement Timeline</h2>
+                    </div>
+                    <div class="panel-body">
+                        <canvas id="movementTimeline"></canvas>
+                    </div>
+                </div>
+
+                <!-- Angle Accuracy -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Turn Angle Accuracy</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="turn-stats">
+                            <div class="turn-stat">
+                                <div class="stat-label">Target Angle</div>
+                                <div class="stat-value" id="targetAngle">--°</div>
+                            </div>
+                            <div class="turn-stat">
+                                <div class="stat-label">Actual Angle</div>
+                                <div class="stat-value" id="actualAngle">--°</div>
+                            </div>
+                            <div class="turn-stat">
+                                <div class="stat-label">Error Margin</div>
+                                <div class="stat-value" id="angleError">--°</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Telemetry Stream -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Real-time Telemetry Stream</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="telemetry-table">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>State</th>
+                                        <th>Command</th>
+                                        <th>Line Status</th>
+                                        <th>Speed (L/R)</th>
+                                        <th>Distance</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="telemetryTable">
+                                    <tr>
+                                        <td colspan="6" class="table-empty">Waiting for data...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Success Criteria -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Success Criteria Checklist</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="checklist">
+                            <div class="checklist-item" id="check_followLine">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Robot correctly follows the line</span>
+                            </div>
+                            <div class="checklist-item" id="check_interpretBarcode">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Barcodes interpreted and correct turn executed</span>
+                            </div>
+                            <div class="checklist-item" id="check_mqttData">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">MQTT dashboard shows real-time data</span>
+                            </div>
+                            <div class="checklist-item" id="check_noTrackLoss">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">No track loss after multiple junctions</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Demo 3: Obstacle Detection + Avoidance -->
+        <div class="view" id="demo3">
+            <div class="dashboard-grid">
+                
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Demo 3: Obstacle Detection + Avoidance + Telemetry</h2>
+                        <div class="demo-badge">Ultrasonic + Servo + Recovery + Full Stack</div>
+                    </div>
+                    <div class="panel-body">
+                        <p class="panel-description">Validates ultrasonic and servo obstacle detection with measurement, avoidance, and full telemetry stack integration.</p>
+                    </div>
+                </div>
+
+                <!-- Obstacle Detection -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Obstacle Detection</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="obstacle-status">
+                            <div class="status-indicator-large" id="obstacleIndicator">
+                                <div class="indicator-text">CLEAR</div>
+                            </div>
+                            <div class="obstacle-distance">
+                                <span class="distance-label">Distance</span>
+                                <span class="distance-value" id="obstacleDistance">-- cm</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Servo Scanning Visualization -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Servo Scanning Pattern</h2>
+                    </div>
+                    <div class="panel-body">
+                        <svg class="servo-scanner" viewBox="0 0 300 200">
+                            <path d="M 150 180 Q 50 100 150 20 Q 250 100 150 180" fill="none" stroke="#2A2F3C" stroke-width="2"/>
+                            <line id="servoBeam" x1="150" y1="180" x2="150" y2="50" stroke="#0066FF" stroke-width="2" opacity="0.6"/>
+                            <circle cx="150" cy="180" r="5" fill="#0066FF"/>
+                            <text x="50" y="110" fill="#8B92A8" font-size="12">Left</text>
+                            <text x="240" y="110" fill="#8B92A8" font-size="12">Right</text>
+                            <text x="140" y="40" fill="#8B92A8" font-size="12">Center</text>
+                        </svg>
+                        <div class="servo-angle">
+                            <span class="angle-label">Current Angle:</span>
+                            <span class="angle-value" id="servoAngle">90°</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Clearance Measurements -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Clearance Analysis</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="clearance-readings">
+                            <div class="clearance-item">
+                                <div class="clearance-label">Left Clearance</div>
+                                <div class="clearance-value" id="clearanceLeft">-- cm</div>
+                            </div>
+                            <div class="clearance-item">
+                                <div class="clearance-label">Center Clearance</div>
+                                <div class="clearance-value" id="clearanceCenter">-- cm</div>
+                            </div>
+                            <div class="clearance-item">
+                                <div class="clearance-label">Right Clearance</div>
+                                <div class="clearance-value" id="clearanceRight">-- cm</div>
+                            </div>
+                        </div>
+                        <div class="chosen-path">
+                            <div class="path-label">Chosen Path</div>
+                            <div class="path-value" id="chosenPath">NONE</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recovery State Machine -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Recovery State Machine</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="recovery-flow">
+                            <div class="recovery-step" data-step="detecting">
+                                <div class="step-number">1</div>
+                                <div class="step-name">DETECTING</div>
+                            </div>
+                            <div class="recovery-arrow">→</div>
+                            <div class="recovery-step" data-step="avoiding">
+                                <div class="step-number">2</div>
+                                <div class="step-name">AVOIDING</div>
+                            </div>
+                            <div class="recovery-arrow">→</div>
+                            <div class="recovery-step" data-step="rejoining">
+                                <div class="step-number">3</div>
+                                <div class="step-name">REJOINING</div>
+                            </div>
+                        </div>
+                        <div class="recovery-status">
+                            Current Phase: <span id="recoveryPhase">IDLE</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Obstacle Width Measurement -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Obstacle Dimensions</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="dimension-metric">
+                            <div class="metric-label">Estimated Width</div>
+                            <div class="metric-value-large" id="obstacleWidth">-- cm</div>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Scan Points</span>
+                            <span class="stat-value" id="scanPoints">0</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Confidence</span>
+                            <span class="stat-value" id="confidenceLevel">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Obstacle Map Visualization -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Top-Down Obstacle Map</h2>
+                    </div>
+                    <div class="panel-body">
+                        <svg class="obstacle-map" viewBox="0 0 600 400">
+                            <!-- Grid -->
+                            <defs>
+                                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                                    <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#2A2F3C" stroke-width="0.5"/>
+                                </pattern>
+                            </defs>
+                            <rect width="600" height="400" fill="url(#grid)"/>
+                            
+                            <!-- Robot position -->
+                            <g id="robotPosition">
+                                <rect x="280" y="350" width="40" height="60" fill="#0066FF" rx="5"/>
+                                <circle cx="300" cy="340" r="3" fill="#fff"/>
+                            </g>
+                            
+                            <!-- Obstacle detection zone -->
+                            <path id="detectionZone" d="M 300 350 L 200 50 L 400 50 Z" fill="#0066FF" opacity="0.1"/>
+                            
+                            <!-- Obstacles will be drawn here by JavaScript -->
+                            <g id="obstaclesGroup"></g>
+                        </svg>
+                    </div>
+                </div>
+
+                <!-- Success Criteria -->
+                <div class="panel panel-full">
+                    <div class="panel-header">
+                        <h2 class="panel-title">Success Criteria Checklist</h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="checklist">
+                            <div class="checklist-item" id="check_obstacleDetect">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Robot stops at obstacle detection</span>
+                            </div>
+                            <div class="checklist-item" id="check_servoScan">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Servo scans left/right to measure distances</span>
+                            </div>
+                            <div class="checklist-item" id="check_pathChoice">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Correct side chosen for navigation</span>
+                            </div>
+                            <div class="checklist-item" id="check_rejoinLine">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Robot navigates around and rejoins line</span>
+                            </div>
+                            <div class="checklist-item" id="check_telemetryLog">
+                                <span class="check-icon">○</span>
+                                <span class="check-text">Full telemetry captured in MQTT log</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Scripts -->
+    <script src="assets/js/config.js"></script>
+    <script src="assets/js/mqtt-handler.js"></script>
+    <script src="assets/js/data-processor.js"></script>
+    <script src="assets/js/visualization.js"></script>
+    <script src="assets/js/app.js"></script>
+</body>
+</html>

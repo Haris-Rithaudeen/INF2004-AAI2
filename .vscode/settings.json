@@ -40,5 +40,6 @@
     "files.associations": {
         "compare": "cpp",
         "cstdint": "cpp"
-    }
+    },
+    "liveServer.settings.port": 5501
 }

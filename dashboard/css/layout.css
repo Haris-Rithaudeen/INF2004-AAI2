@@ -1,0 +1,74 @@
+/* Layout Styles */
+
+.main-content {
+    max-width: 1920px;
+    margin: 0 auto;
+    padding: var(--spacing-6);
+}
+
+/* Views */
+.view {
+    display: none;
+}
+
+.view.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+}
+
+/* Dashboard Grid */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: var(--spacing-6);
+}
+
+.panel {
+    grid-column: span 4;
+}
+
+.panel-full {
+    grid-column: span 12;
+}
+
+.panel-half {
+    grid-column: span 6;
+}
+
+.panel-third {
+    grid-column: span 4;
+}
+
+.panel-two-thirds {
+    grid-column: span 8;
+}
+
+/* Responsive Grid */
+@media (max-width: 1400px) {
+    .panel {
+        grid-column: span 6;
+    }
+    
+    .panel-third {
+        grid-column: span 6;
+    }
+}
+
+@media (max-width: 768px) {
+    .main-content {
+        padding: var(--spacing-4);
+    }
+    
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+        gap: var(--spacing-4);
+    }
+    
+    .panel,
+    .panel-full,
+    .panel-half,
+    .panel-third,
+    .panel-two-thirds {
+        grid-column: span 1;
+    }
+}

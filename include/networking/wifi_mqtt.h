@@ -46,6 +46,14 @@ bool wifi_mqtt_connect(void);
 
 // Connect (or reconnect) to MQTT broker; returns true when connected
 bool mqtt_connect_broker(void);
+bool mqtt_is_connected(void);
+bool mqtt_publish_telemetry(float left_speed, float right_speed, 
+                            float left_dist, float right_dist,
+                            float heading, int16_t accel_x, 
+                            int16_t accel_y, int16_t accel_z);
+bool mqtt_publish_ping(int count);
+bool mqtt_publish_sensors(float ultrasonic_cm, uint16_t ir_line_raw, bool on_line);
+bool mqtt_publish_barcode(const char* barcode_value, uint8_t bar_count);
 
 // Poll lwIP/CYW43 + reconnect logic (call frequently in main loop)
 void wifi_mqtt_poll(void);
