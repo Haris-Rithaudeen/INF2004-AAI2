@@ -83,6 +83,11 @@
 #define IR_BARCODE_THRESHOLD         2000
 #define IR_BARCODE_SAMPLE_RATE_US    1000
 #define BARCODE_MAX_BARS             50
+#define BARCODE_DELIMITER_LIMIT      2       // Number of '*' delimiters to detect end
+
+// ===== Barcode Turn Configuration =====
+#define BARCODE_TURN_SPEED           20.0f   // Speed for barcode-triggered turns
+#define BARCODE_TURN_TIMEOUT_MS      8000    // Timeout for turns
 
 // ===== Ultrasonic Sensor config =====
 #define ULTRASONIC_SPEED_CM_PER_US      0.0343f

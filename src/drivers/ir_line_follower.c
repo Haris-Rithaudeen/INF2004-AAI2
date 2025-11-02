@@ -29,6 +29,7 @@ uint16_t ir_line_read_adc_averaged(int samples) {
     uint32_t acc = 0;
     for (int i = 0; i < samples; ++i) {
         acc += ir_line_read_adc_raw();
+        sleep_us(100);  // Small delay between samples
     }
     return (uint16_t)(acc / (uint32_t)samples);
 }
@@ -47,26 +48,25 @@ bool ir_line_is_on_line(void) {
     return (surface[0] == 'B'); // 'B' for BLACK
 }
 
-float ir_line_get_position_error(void) {
-    // This is a simplified version for a single sensor
-    // For multiple sensors, you'd calculate centroid
+float ir_line_get_normalized_position(void) {
+    // Returns 0.0 (white) to 1.0 (black)
     uint16_t raw = ir_line_read_adc_averaged(4);
-    
-    // Normalize to -1.0 (far left/white) to +1.0 (far right/black)
     float normalized = (float)raw / 4095.0f;
     
+    // If white reads high, invert
     if (IR_LINE_WHITE_HIGH) {
-        return (normalized - 0.5f) * 2.0f;
-    } else {
-        return (0.5f - normalized) * 2.0f;
+        normalized = 1.0f - normalized;
     }
+    
+    return normalized;
 }
 
 void ir_line_print_data(void) {
     uint16_t raw = ir_line_read_adc_averaged(8);
     const char* cls = ir_line_classify_surface(raw, IR_LINE_THRESHOLD);
     bool on_line = ir_line_is_on_line();
+    float normalized = ir_line_get_normalized_position();
     
-    printf("[LINE] raw=%u surface=%s on_line=%s\n",
-           raw, cls, on_line ? "YES" : "NO");
+    printf("[LINE] raw=%u normalized=%.3f surface=%s on_line=%s\n",
+           raw, normalized, cls, on_line ? "YES" : "NO");
 }

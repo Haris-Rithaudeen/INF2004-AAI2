@@ -18,9 +18,8 @@ const char* ir_line_classify_surface(uint16_t raw, uint16_t threshold);
 // Check if currently on line (returns true if on black line)
 bool ir_line_is_on_line(void);
 
-// Get line position error (-1.0 to +1.0, 0 = centered)
-// This is useful for PID control
-float ir_line_get_position_error(void);
+// Get normalized sensor position (0.0 = full white, 1.0 = full black)
+float ir_line_get_normalized_position(void);
 
 // Print line follower data
 void ir_line_print_data(void);
