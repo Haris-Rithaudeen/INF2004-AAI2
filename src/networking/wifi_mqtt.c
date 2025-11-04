@@ -45,13 +45,6 @@ static void mqtt_connection_cb(mqtt_client_t *client, void *arg,
         mqtt_connected = true;
         mqtt_reconnect_failures = 0;
 
-        // Subscribe to default command topic (backward-compatible)
-        err_t err = mqtt_subscribe(client, MQTT_SUB_TOPIC, 0, NULL, NULL);
-        if (err == ERR_OK) {
-            printf("[MQTT] ✓ Subscribed to %s\n", MQTT_SUB_TOPIC);
-        } else {
-            printf("[MQTT] × Subscribe failed: %d\n", err);
-        }
     } else {
         printf("[MQTT] × Connection failed, status: %d\n", status);
         mqtt_connected = false;
@@ -362,4 +355,70 @@ bool mqtt_publish_barcode(const char* barcode_value,
                             buffer, (u16_t)len, 
                             0, 0, mqtt_pub_request_cb, NULL);
     return (err == ERR_OK);
+}
+
+// Publish IMU data to robot/compass topic
+bool mqtt_publish_imu(float heading, int16_t mx, int16_t my, int16_t mz,
+                     int16_t ax, int16_t ay, int16_t az) {
+    if (!mqtt_is_connected()) return false;
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"heading\":%.2f,\"mx\":%d,\"my\":%d,\"mz\":%d,\"ax\":%d,\"ay\":%d,\"az\":%d}",
+        heading, mx, my, mz, ax, ay, az);
+    
+    return mqtt_publish_text("robot/compass", payload, 0, false);
+}
+
+// Publish motor data to robot/telemetry topic
+bool mqtt_publish_motors(float left_speed, float right_speed,
+                        float left_dist, float right_dist) {
+    if (!mqtt_is_connected()) return false;
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"ls\":%.2f,\"rs\":%.2f,\"ld\":%.2f,\"rd\":%.2f}",
+        left_speed, right_speed, left_dist, right_dist);
+    
+    return mqtt_publish_text("robot/telemetry", payload, 0, false);
+}
+
+// Publish PID data to robot/pid topic
+bool mqtt_publish_pid(float kp, float ki, float kd, float error, float output) {
+    if (!mqtt_is_connected()) return false;
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"kp\":%.3f,\"ki\":%.3f,\"kd\":%.3f,\"error\":%.3f,\"output\":%.3f}",
+        kp, ki, kd, error, output);
+    
+    return mqtt_publish_text("robot/pid", payload, 0, false);
+}
+
+// Publish state machine data to robot/state topic
+bool mqtt_publish_state(const char* state, const char* command) {
+    if (!mqtt_is_connected()) return false;
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"state\":\"%s\",\"command\":\"%s\"}",
+        state ? state : "IDLE",
+        command ? command : "");
+    
+    return mqtt_publish_text("robot/state", payload, 0, false);
+}
+
+// Publish obstacle detection data to robot/obstacle topic
+bool mqtt_publish_obstacle(float distance, int servo_angle,
+                          const char* chosen_path, const char* status) {
+    if (!mqtt_is_connected()) return false;
+    
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+        "{\"distance\":%.2f,\"servo_angle\":%d,\"chosen_path\":\"%s\",\"status\":\"%s\"}",
+        distance, servo_angle,
+        chosen_path ? chosen_path : "NONE",
+        status ? status : "CLEAR");
+    
+    return mqtt_publish_text("robot/obstacle", payload, 0, false);
 }
