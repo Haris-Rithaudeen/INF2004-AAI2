@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 
 // Try to include credentials file, otherwise use defaults
 #ifdef USE_WIFI_CREDENTIALS_FILE
@@ -84,5 +85,14 @@ bool mqtt_subscribe_topic(const char *topic, int qos);
 typedef void (*mqtt_msg_cb_t)(const char *topic, const uint8_t *payload, size_t len);
 void mqtt_set_message_cb(mqtt_msg_cb_t cb);
 
+// Add these new publish functions
+bool mqtt_publish_imu(float heading, int16_t mx, int16_t my, int16_t mz, 
+                     int16_t ax, int16_t ay, int16_t az);
+bool mqtt_publish_motors(float left_speed, float right_speed, 
+                        float left_dist, float right_dist);
+bool mqtt_publish_pid(float kp, float ki, float kd, float error, float output);
+bool mqtt_publish_state(const char* state, const char* command);
+bool mqtt_publish_obstacle(float distance, int servo_angle, 
+                          const char* chosen_path, const char* status);
 
 #endif

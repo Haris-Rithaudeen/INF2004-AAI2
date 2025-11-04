@@ -9,6 +9,7 @@
 #include "drivers/encoder.h"
 #include "drivers/magnetometer.h"
 #include "control/pid.h"
+#include "networking/wifi_mqtt.h"
 #include "fsm.h"
 
 // ---- Unified GPIO ISR for buttons + encoders ----
@@ -36,6 +37,10 @@ static uint speed_pct = 70;
 static uint32_t last_print_ms = 0;
 static float target_heading = 0.0f;
 static bool heading_locked = false;
+
+// MQTT telemetry timing
+static uint32_t last_telemetry_ms = 0;
+#define TELEMETRY_INTERVAL_MS 100  // Publish telemetry every 100ms
 
 // Startup state machine
 typedef enum {
@@ -73,6 +78,9 @@ void fsm_init(void) {
     stdio_init_all();
     motor_init_all();
     encoder_init();
+    wifi_mqtt_init();
+    wifi_mqtt_connect();
+    mqtt_connect_broker();
 
     // Initialize magnetometer
     if (!magnetometer_init()) {
@@ -98,9 +106,9 @@ void fsm_init(void) {
     gpio_set_irq_enabled(RIGHT_ENCODER_PIN, enc_edge, true);
 
     // PID setup for velocity control
-    pid_init(&pid_r, PID_KP_VEL, PID_KI_VEL, PID_KD_VEL, dt_s(),
+    pid_init(&pid_r, PID_R_KP, PID_R_KI, PID_R_KD, dt_s(),
              PID_OUT_MIN, PID_OUT_MAX, PID_INTEG_MIN, PID_INTEG_MAX);
-    pid_init(&pid_l, PID_KP_VEL, PID_KI_VEL, PID_KD_VEL, dt_s(),
+    pid_init(&pid_l, PID_L_KP, PID_L_KI, PID_L_KD, dt_s(),
              PID_OUT_MIN, PID_OUT_MAX, PID_INTEG_MIN, PID_INTEG_MAX);
 
     // PID setup for heading correction
@@ -127,6 +135,7 @@ void fsm_init(void) {
     imu_samples_collected = 0;
     heading_locked = false;
     ramp_multiplier = 0.0f;
+    last_telemetry_ms = 0;
 }
 
 // helper: UI % -> target wheel speed (mm/s), signed by direction
@@ -282,6 +291,51 @@ void fsm_step(void) {
     // ========== DRIVE MOTORS ==========
     motor_set_signed(u_r, u_l);
 
+    // ========== PUBLISH MQTT TELEMETRY ==========
+    if (mqtt_is_connected() && (t - last_telemetry_ms >= TELEMETRY_INTERVAL_MS)) {
+        // Publish motor telemetry (convert mm/s to cm/s, mm to cm)
+        float left_speed_cm_s = meas_l_mm_s / 10.0f;
+        float right_speed_cm_s = meas_r_mm_s / 10.0f;
+        float left_dist_cm = (cur_l * mm_per_tick) / 10.0f;
+        float right_dist_cm = (cur_r * mm_per_tick) / 10.0f;
+        
+        mqtt_publish_motors(left_speed_cm_s, right_speed_cm_s, 
+                           left_dist_cm, right_dist_cm);
+        
+        // Publish IMU data if available
+        if (imu_ok) {
+            mqtt_publish_imu(mag_data.heading,
+                           mag_data.x, mag_data.y, mag_data.z,
+                           0, 0, 0);  // No accelerometer data in this system
+        }
+        
+        // Publish PID data (using right wheel as reference)
+        float pid_error = tgt_mm_s - meas_r_mm_s;
+        mqtt_publish_pid(PID_R_KP, PID_R_KI, PID_R_KD, pid_error, u_r_base);
+        
+        // Publish state
+        const char* state_str;
+        switch (startup_state) {
+            case STATE_IMU_WARMUP:
+                state_str = "IMU_WARMUP";
+                break;
+            case STATE_MOTOR_RAMPUP:
+                state_str = "MOTOR_RAMPUP";
+                break;
+            case STATE_HEADING_LOCK:
+                state_str = "HEADING_LOCK";
+                break;
+            case STATE_RUNNING:
+                state_str = forward_mode ? "FORWARD" : "BACKWARD";
+                break;
+            default:
+                state_str = "UNKNOWN";
+        }
+        mqtt_publish_state(state_str, "");
+        
+        last_telemetry_ms = t;
+    }
+
     // ========== STATUS PRINT ==========
     if (t - last_print_ms >= DISPLAY_INTERVAL_MS) {
         printf("========== Status ==========\n");
@@ -312,6 +366,9 @@ void fsm_step(void) {
         } else {
             printf("IMU - ✗ READ FAILED | Motor Duty - L: %.1f%% | R: %.1f%%\n", u_l, u_r);
         }
+        
+        // Show MQTT connection status
+        printf("MQTT: %s\n", mqtt_is_connected() ? "✓ Connected" : "✗ Disconnected");
         printf("============================\n\n");
         
         last_print_ms = t;

@@ -5,7 +5,7 @@
 const CONFIG = {
     // MQTT Broker Settings
     mqtt: {
-        broker: 'ws://localhost:9001',
+        broker: 'ws://172.20.10.2:9001',
         options: {
             clientId: `robot_dashboard_${Math.random().toString(16).substr(2, 8)}`,
             clean: true,
