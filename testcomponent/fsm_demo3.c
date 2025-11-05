@@ -271,50 +271,87 @@ static float chord_width_mm(float range_cm, float span_deg) {
     return 2.0f * d_m * tanf(rad * 0.5f) * 1000.0f;
 }
 
-// Clean, grouped scan output
+#define US_BEAM_HALF_DEG 7.5f
+
+// Obstacle scan output
 static obs_scan_t scan_obstacle_and_width(void) {
     obs_scan_t r = (obs_scan_t){0};
 
-    // Quick 3-point probe for L/C/R
+    // Quick L/C/R probe
     servo_set_angle(SERVO_LEFT_ANGLE);   sleep_ms(SERVO_SCAN_DELAY_MS);
     r.left_cm   = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
-
     servo_set_angle(SERVO_CENTER_ANGLE); sleep_ms(SERVO_SCAN_DELAY_MS);
     r.center_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
-
     servo_set_angle(SERVO_RIGHT_ANGLE);  sleep_ms(SERVO_SCAN_DELAY_MS);
     r.right_cm  = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
 
-    // Wider sweep to estimate lateral span/width
+    // Sweep & collect first/last edge samples
     float first_deg = NAN, last_deg = NAN;
-    r.ref_range_cm = NAN;
+    float d_first = NAN, d_last = NAN;
+    float d_min = NAN;
 
+    // Small helper to smooth each reading
+    auto float read_cm3(void) {
+        return ultrasonic_measure_averaged_cm(3);
+    }
+
+    bool in_band = false;
     for (int a = SERVO_SWEEP_START_DEG; a <= SERVO_SWEEP_END_DEG; a += SERVO_SWEEP_STEP_DEG) {
         servo_set_angle(a);
         sleep_ms(SERVO_SWEEP_SETTLE_MS);
-        float d = ultrasonic_measure_averaged_cm(3);
-        if (us_ok(d) && d <= WIDTH_CM_THRESH) {
-            if (isnan(first_deg)) first_deg = (float)a;
+        float d = read_cm3();
+
+        // “Near band” detection
+        bool ok = us_ok(d) && d <= WIDTH_CM_THRESH;
+
+        if (ok) {
+            if (!in_band) {
+                // Entering band
+                first_deg = (float)a;
+                d_first = d;
+                in_band = true;
+            }
             last_deg = (float)a;
-            if (isnan(r.ref_range_cm) || d < r.ref_range_cm) r.ref_range_cm = d; // keep the closest as reference
+            d_last = d;
+            if (isnan(d_min) || d < d_min) d_min = d;
+        } else if (in_band) {
+            // Leaving band
+            break;
         }
     }
 
-    // Re-center the sensor
+    // Recenter
     servo_set_angle(SERVO_CENTER_ANGLE);
     sleep_ms(SERVO_SCAN_DELAY_MS);
 
-    // Compute span & physical width
-    if (!isnan(first_deg) && !isnan(last_deg) && !isnan(r.ref_range_cm)) {
-        r.span_deg = last_deg - first_deg;
-        if (r.span_deg >= MIN_SPAN_DEG) {
-            r.est_width_mm = chord_width_mm(r.ref_range_cm, r.span_deg);
-        } else {
-            r.est_width_mm = NAN;
+    if (!isnan(first_deg) && !isnan(last_deg) && !isnan(d_first) && !isnan(d_last)) {
+        float span_deg = last_deg - first_deg;
+
+        // Compensate for cone
+        float span_adj_deg = span_deg - 2.0f * US_BEAM_HALF_DEG;
+        if (span_adj_deg < 0.0f) span_adj_deg = 0.0f;
+
+        r.span_deg = span_deg;
+        r.ref_range_cm = (d_first + d_last) * 0.5f;
+
+        // Law of cosines on the two edge points
+        float th = span_adj_deg * (float)M_PI / 180.0f;
+        float d1 = d_first / 100.0f;
+        float d2 = d_last  / 100.0f;
+        float chord_m = sqrtf(fmaxf(0.0f, d1*d1 + d2*d2 - 2.0f*d1*d2*cosf(th)));
+
+        // Convert to mm
+        r.est_width_mm = chord_m * 1000.0f;
+
+        float d_mean_m = (d1 + d2) * 0.5f;
+        float chord_quick_mm = 2.0f * d_mean_m * tanf(th * 0.5f) * 1000.0f;
+        if (!isnan(chord_quick_mm) && chord_quick_mm > 0.0f && r.est_width_mm > 1.5f * chord_quick_mm) {
+            r.est_width_mm = chord_quick_mm; // prevent extreme overestimates
         }
     } else {
         r.span_deg = 0.0f;
         r.est_width_mm = NAN;
+        r.ref_range_cm = d_min;
     }
 
     // Print results
@@ -323,17 +360,12 @@ static obs_scan_t scan_obstacle_and_width(void) {
         "│ L:%6.1f cm   C:%6.1f cm   R:%6.1f cm\n",
         r.left_cm, r.center_cm, r.right_cm
     );
-
     if (!isnan(r.est_width_mm)) {
-        printf("│ Span:%5.1f°  @~%4.1f cm   ⇒  width ≈ %4.0f mm\n",
+        printf("│ Span:%5.1f° (@~%4.1f cm) ⇒ width ≈ %4.0f mm\n",
                r.span_deg, r.ref_range_cm, r.est_width_mm);
-    } else if (!isnan(r.span_deg) && r.span_deg > 0.0f) {
-        printf("│ Span:%5.1f°  (width undetermined)\n", r.span_deg);
     } else {
         printf("│ Span:  —     (no contiguous near-span)\n");
     }
-
-    // Print which side looks clearer
     const char* hint =
         (us_ok(r.left_cm)  && r.left_cm  > OBSTACLE_THRESHOLD_CM*1.5f) ||
         (us_ok(r.right_cm) && r.right_cm > OBSTACLE_THRESHOLD_CM*1.5f)
@@ -341,7 +373,6 @@ static obs_scan_t scan_obstacle_and_width(void) {
             : "no clear side";
     printf("│ Clearer side: %s\n", hint);
     printf("└───────────────────────────────────────────────\n\n");
-
     return r;
 }
 
