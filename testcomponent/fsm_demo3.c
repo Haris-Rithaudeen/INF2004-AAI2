@@ -21,7 +21,6 @@
 // FSM States
 typedef enum {
     STATE_LINE_FOLLOW,      // Following the line normally
-    STATE_OBSTACLE_DETECT,  // Obstacle detected, stopping
     STATE_SCAN_LEFT,        // Scanning left side
     STATE_SCAN_RIGHT,       // Scanning right side
     STATE_DECIDE_PATH,      // Deciding which way to go
@@ -31,19 +30,20 @@ typedef enum {
 static robot_state_t current_state = STATE_LINE_FOLLOW;
 
 // Obstacle detection parameters
-#define OBSTACLE_THRESHOLD_CM       20.0f
+#define OBSTACLE_THRESHOLD_CM      20.0f
 #define SCAN_SAMPLES               3
 #define SERVO_CENTER_ANGLE         90
 #define SERVO_LEFT_ANGLE           45
 #define SERVO_RIGHT_ANGLE          135
 #define SERVO_SCAN_DELAY_MS        300
+#define WIDTH_CM_THRESH            30.0f
+#define SERVO_SWEEP_START_DEG      40
+#define SERVO_SWEEP_END_DEG        140
+#define SERVO_SWEEP_STEP_DEG       5
+#define SERVO_SWEEP_SETTLE_MS      120
+#define MIN_SPAN_DEG               6.0f
 
-// Scan results
-static float left_distance_cm = 0.0f;
-static float right_distance_cm = 0.0f;
-static float center_distance_cm = 0.0f;
-
-// ---- GPIO ISR ----
+// GPIO ISR
 static volatile bool g_toggle_dir_req = false;
 static volatile bool g_change_speed_req = false;
 static volatile uint32_t g_last_dir_ms = 0;
@@ -71,7 +71,7 @@ static void gpio_isr_unified(uint gpio, uint32_t events) {
     }
 }
 
-// ---- State ----
+// State
 static bool forward = true;
 static uint speed_pct = 25;
 static uint32_t last_print_ms = 0;
@@ -141,11 +141,11 @@ void fsm_init(void) {
 
     // Initialize magnetometer
     if (!magnetometer_init()) {
-        printf("⚠️  WARNING: Magnetometer init failed! Running without IMU smoothing.\n");
+        printf("WARNING: Magnetometer init failed! Running without IMU smoothing.\n");
         imu_ready = false;
         startup_state = STATE_RUNNING;
     } else {
-        printf("✓ Magnetometer initialized (%d-sample moving average)\n", MAG_FILTER_SIZE);
+        printf("Magnetometer initialized (%d-sample moving average)\n", MAG_FILTER_SIZE);
         imu_ready = true;
     }
 
@@ -203,7 +203,7 @@ void fsm_init(void) {
     printf("└──────────────────────────────────────────────────────┘\n\n");
     
     if (imu_ready) {
-        printf("⏳ Warming up IMU filter (%d samples)...\n\n", IMU_WARMUP_SAMPLES);
+        printf("Warming up IMU filter (%d samples)...\n\n", IMU_WARMUP_SAMPLES);
     }
     
     printf("Current Speed: %d%% | Max: %d%%\n", speed_pct, LINE_FOLLOW_MAX_SPEED);
@@ -255,33 +255,94 @@ static float feedforward_right(float target_mm_s) {
     return pwm;
 }
 
-// Scan for obstacles with servo-mounted ultrasonic
-static void scan_obstacle(void) {
-    printf("\n🔍 SCANNING OBSTACLE...\n");
-    
-    // Scan left
-    servo_set_angle(SERVO_LEFT_ANGLE);
-    sleep_ms(SERVO_SCAN_DELAY_MS);
-    left_distance_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
-    printf("   LEFT (45°):   %.1f cm\n", left_distance_cm);
-    
-    // Scan center
+typedef struct {
+    float left_cm, center_cm, right_cm;
+    float ref_range_cm;
+    float span_deg;
+    float est_width_mm;
+    int   chosen;
+} obs_scan_t;
+
+static inline bool us_ok(float d) { return !isnan(d) && d > 1.0f && d < 400.0f; }
+
+static float chord_width_mm(float range_cm, float span_deg) {
+    float d_m = fmaxf(range_cm, 1.0f) / 100.0f;
+    float rad = span_deg * (float)M_PI / 180.0f;
+    return 2.0f * d_m * tanf(rad * 0.5f) * 1000.0f;
+}
+
+// Clean, grouped scan output
+static obs_scan_t scan_obstacle_and_width(void) {
+    obs_scan_t r = (obs_scan_t){0};
+
+    // Quick 3-point probe for L/C/R
+    servo_set_angle(SERVO_LEFT_ANGLE);   sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.left_cm   = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+
+    servo_set_angle(SERVO_CENTER_ANGLE); sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.center_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+
+    servo_set_angle(SERVO_RIGHT_ANGLE);  sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.right_cm  = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+
+    // Wider sweep to estimate lateral span/width
+    float first_deg = NAN, last_deg = NAN;
+    r.ref_range_cm = NAN;
+
+    for (int a = SERVO_SWEEP_START_DEG; a <= SERVO_SWEEP_END_DEG; a += SERVO_SWEEP_STEP_DEG) {
+        servo_set_angle(a);
+        sleep_ms(SERVO_SWEEP_SETTLE_MS);
+        float d = ultrasonic_measure_averaged_cm(3);
+        if (us_ok(d) && d <= WIDTH_CM_THRESH) {
+            if (isnan(first_deg)) first_deg = (float)a;
+            last_deg = (float)a;
+            if (isnan(r.ref_range_cm) || d < r.ref_range_cm) r.ref_range_cm = d; // keep the closest as reference
+        }
+    }
+
+    // Re-center the sensor
     servo_set_angle(SERVO_CENTER_ANGLE);
     sleep_ms(SERVO_SCAN_DELAY_MS);
-    center_distance_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
-    printf("   CENTER (90°): %.1f cm\n", center_distance_cm);
-    
-    // Scan right
-    servo_set_angle(SERVO_RIGHT_ANGLE);
-    sleep_ms(SERVO_SCAN_DELAY_MS);
-    right_distance_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
-    printf("   RIGHT (135°): %.1f cm\n", right_distance_cm);
-    
-    // Return to center
-    servo_set_angle(SERVO_CENTER_ANGLE);
-    sleep_ms(SERVO_SCAN_DELAY_MS);
-    
-    printf("✓ Scan complete\n\n");
+
+    // Compute span & physical width
+    if (!isnan(first_deg) && !isnan(last_deg) && !isnan(r.ref_range_cm)) {
+        r.span_deg = last_deg - first_deg;
+        if (r.span_deg >= MIN_SPAN_DEG) {
+            r.est_width_mm = chord_width_mm(r.ref_range_cm, r.span_deg);
+        } else {
+            r.est_width_mm = NAN;
+        }
+    } else {
+        r.span_deg = 0.0f;
+        r.est_width_mm = NAN;
+    }
+
+    // Print results
+    printf(
+        "\n┌─ Obstacle Scan ────────────────────────────────\n"
+        "│ L:%6.1f cm   C:%6.1f cm   R:%6.1f cm\n",
+        r.left_cm, r.center_cm, r.right_cm
+    );
+
+    if (!isnan(r.est_width_mm)) {
+        printf("│ Span:%5.1f°  @~%4.1f cm   ⇒  width ≈ %4.0f mm\n",
+               r.span_deg, r.ref_range_cm, r.est_width_mm);
+    } else if (!isnan(r.span_deg) && r.span_deg > 0.0f) {
+        printf("│ Span:%5.1f°  (width undetermined)\n", r.span_deg);
+    } else {
+        printf("│ Span:  —     (no contiguous near-span)\n");
+    }
+
+    // Print which side looks clearer
+    const char* hint =
+        (us_ok(r.left_cm)  && r.left_cm  > OBSTACLE_THRESHOLD_CM*1.5f) ||
+        (us_ok(r.right_cm) && r.right_cm > OBSTACLE_THRESHOLD_CM*1.5f)
+            ? ((r.left_cm >= r.right_cm) ? "LEFT looks clearer" : "RIGHT looks clearer")
+            : "no clear side";
+    printf("│ Clearer side: %s\n", hint);
+    printf("└───────────────────────────────────────────────\n\n");
+
+    return r;
 }
 
 void fsm_step(void) {
@@ -301,8 +362,8 @@ void fsm_step(void) {
                 if (magnetometer_read_data(&mag_data)) {
                     imu_samples++;
                     if (imu_samples >= IMU_WARMUP_SAMPLES) {
-                        printf("✓ IMU filter ready\n");
-                        printf("⏳ Locking initial heading...\n");
+                        printf("IMU filter ready\n");
+                        printf("Locking initial heading...\n");
                         startup_state = STATE_HEADING_LOCK;
                     }
                 }
@@ -315,7 +376,7 @@ void fsm_step(void) {
                     target_heading = mag_data.heading;
                     heading_locked = true;
                     startup_state = STATE_RUNNING;
-                    printf("✓ Heading locked: %.1f° | System ready!\n\n", target_heading);
+                    printf("Heading locked: %.1f° | System ready!\n\n", target_heading);
                 }
                 break;
                 
@@ -366,57 +427,61 @@ void fsm_step(void) {
         case STATE_LINE_FOLLOW: {
             // Check for obstacle ahead
             if (!isnan(obstacle_distance) && obstacle_distance < OBSTACLE_THRESHOLD_CM) {
-                printf("\n⚠️  OBSTACLE DETECTED at %.1f cm!\n", obstacle_distance);
-                motor_set_signed(0, 0);  // Stop immediately
-                current_state = STATE_OBSTACLE_DETECT;
+                printf("\nOBSTACLE DETECTED at %.1f cm!\n", obstacle_distance);
+                motor_set_signed(0, 0);
+                current_state = STATE_DECIDE_PATH;
                 state_enter_time = now;
                 return;
             }
             
-            // Normal line following (same as original)
+            // Normal line following
             // Read IR and continue...
             break;
         }
         
-        case STATE_OBSTACLE_DETECT: {
-            motor_set_signed(0, 0);  // Stay stopped
-            
-            if ((now - state_enter_time) > 500) {  // Wait 500ms
-                scan_obstacle();
-                current_state = STATE_DECIDE_PATH;
-                state_enter_time = now;
-            }
-            return;
-        }
-        
         case STATE_DECIDE_PATH: {
-            motor_set_signed(0, 0);
-            
-            // Determine which side is clearer
-            bool left_clear = !isnan(left_distance_cm) && left_distance_cm > OBSTACLE_THRESHOLD_CM * 1.5f;
-            bool right_clear = !isnan(right_distance_cm) && right_distance_cm > OBSTACLE_THRESHOLD_CM * 1.5f;
-            
-            if (left_clear && right_clear) {
-                // Both sides clear, choose the one with more space
-                if (left_distance_cm > right_distance_cm) {
-                    printf("✓ LEFT side is clearer (%.1f cm)\n", left_distance_cm);
-                } else {
-                    printf("✓ RIGHT side is clearer (%.1f cm)\n", right_distance_cm);
-                }
-            } else if (left_clear) {
-                printf("✓ LEFT side is clear (%.1f cm)\n", left_distance_cm);
-            } else if (right_clear) {
-                printf("✓ RIGHT side is clear (%.1f cm)\n", right_distance_cm);
-            } else {
-                printf("⚠️  Both sides blocked! Attempting to back up...\n");
-            }
-            
-            // Resume line following after decision
-            current_state = STATE_LINE_FOLLOW;
-            state_enter_time = now;
-            printf("▶️  Resuming line following\n\n");
-            return;
+        motor_set_signed(0, 0);
+
+        // Use the scanner
+        obs_scan_t S = scan_obstacle_and_width();
+
+        // Decision rule:
+        // 1) prefer the side with larger distance
+        // 2) if both clear, pick max distance
+        // 3) if both blocked, report none
+        bool left_clear  = us_ok(S.left_cm)  && S.left_cm  > OBSTACLE_THRESHOLD_CM * 1.5f;
+        bool right_clear = us_ok(S.right_cm) && S.right_cm > OBSTACLE_THRESHOLD_CM * 1.5f;
+
+        if (left_clear && right_clear) {
+            S.chosen = (S.left_cm >= S.right_cm) ? -1 : +1;
+        } else if (left_clear) {
+            S.chosen = -1;
+        } else if (right_clear) {
+            S.chosen = +1;
+        } else {
+            S.chosen = 0;
         }
+
+        // Console feedback
+        if (S.chosen == -1) printf("Decision: LEFT side is clearer (%.1f cm)\n", S.left_cm);
+        else if (S.chosen == +1) printf("Decision: RIGHT side is clearer (%.1f cm)\n", S.right_cm);
+        else printf("Both sides blocked (L=%.1f, R=%.1f). Will hold course.\n", S.left_cm, S.right_cm);
+
+        // MQTT Telemetry
+        #ifdef mqtt_pub_eventf
+        mqtt_pub_eventf("robot/obstacle",
+                        "{ \"left_cm\":%.1f, \"center_cm\":%.1f, \"right_cm\":%.1f, "
+                        "\"span_deg\":%.1f, \"ref_cm\":%.1f, \"width_mm\":%.0f, \"chosen\":%d }",
+                        S.left_cm, S.center_cm, S.right_cm,
+                        S.span_deg, S.ref_range_cm, S.est_width_mm, S.chosen);
+        mqtt_pub_eventf("robot/status", "{ \"state\":\"DECIDE_PATH\" }");
+        #endif
+
+        current_state = STATE_LINE_FOLLOW;
+        state_enter_time = now;
+        printf("Resuming line following\n\n");
+        return;
+    }
         
         default:
             current_state = STATE_LINE_FOLLOW;
@@ -696,7 +761,6 @@ void fsm_step(void) {
         printf("\n╔══════════════════════════════════════════════════════════════╗\n");
         printf("║ STATE: %-20s | Speed: %u%%→%u%%              ║\n",
                (current_state == STATE_LINE_FOLLOW) ? "LINE FOLLOWING" :
-               (current_state == STATE_OBSTACLE_DETECT) ? "OBSTACLE DETECTED" :
                (current_state == STATE_DECIDE_PATH) ? "DECIDING PATH" : "UNKNOWN",
                speed_pct, effective_speed);
         printf("╠══════════════════════════════════════════════════════════════╣\n");
