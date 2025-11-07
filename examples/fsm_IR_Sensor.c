@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
-#include "config.h"
+#include "config/config.h"
 #include "drivers/ir_line_follower.h"
 #include "fsm.h"
 

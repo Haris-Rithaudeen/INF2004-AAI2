@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include "config.h"
+#include "config/config.h"
 #include "drivers/motor.h"
 #include "drivers/encoder.h"
 #include "fsm.h"

@@ -1,3 +1,5 @@
+#ifndef CONTROL_PID_H
+#define CONTROL_PID_H
 #pragma once
 #include <stdint.h>
 
@@ -22,3 +24,4 @@ void  pid_reset(pid_t* p);
 void  pid_set_gains(pid_t* p, float kp, float ki, float kd);
 float pid_update(pid_t* p, float setpoint, float measurement);
 
+#endif

@@ -1,6 +1,6 @@
 #ifndef ULTRASONIC_H
 #define ULTRASONIC_H
-
+#pragma once
 #include "pico/stdlib.h"
 #include <stdbool.h>
 

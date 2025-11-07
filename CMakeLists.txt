@@ -64,6 +64,7 @@ add_executable(INF2004-AAI2
 
 target_include_directories(INF2004-AAI2 PRIVATE 
     ${CMAKE_CURRENT_LIST_DIR}/include
+    ${CMAKE_CURRENT_LIST_DIR}/config
     ${CMAKE_CURRENT_LIST_DIR}
 )
 

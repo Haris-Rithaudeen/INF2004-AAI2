@@ -1,6 +1,6 @@
 #ifndef IR_LINE_FOLLOWER_H
 #define IR_LINE_FOLLOWER_H
-
+#pragma once
 #include "pico/stdlib.h"
 
 // Initialize line follower IR sensor

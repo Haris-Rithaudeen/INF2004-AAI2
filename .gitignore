@@ -1,7 +1,16 @@
-build
-!.vscode/*
-
-# Add these lines to ignore credentials
+/build/
+/cmake-build-*/
+/compile_commands.json
+/.vscode/
+/.idea/
+/pico-sdk/
+/generated/
+*.elf
+*.uf2
+*.bin
+*.hex
+*.map
+.DS_Store
 wifi_credentials.h
 secrets.h
 *.env

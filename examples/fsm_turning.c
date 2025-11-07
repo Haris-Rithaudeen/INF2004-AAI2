@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "pico/stdlib.h"
-#include "config.h"
+#include "config/config.h"
 #include "drivers/magnetometer.h"
 #include "drivers/motor.h"
 #include "fsm.h"

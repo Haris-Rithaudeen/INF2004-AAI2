@@ -1,3 +1,6 @@
+#ifndef DRIVERS_MAGNETOMETER_H
+#define DRIVERS_MAGNETOMETER_H
+#pragma once
 #include "pico/stdlib.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -42,3 +45,5 @@ void magnetometer_finish_calibration(void);
 
 // Reset the moving average filter
 void magnetometer_reset_filter(void);
+
+#endif

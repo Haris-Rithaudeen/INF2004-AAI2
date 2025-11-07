@@ -1,6 +1,6 @@
 #ifndef SERVO_H
 #define SERVO_H
-
+#pragma once
 #include "pico/stdlib.h"
 #include <stdbool.h>
 

@@ -2,7 +2,7 @@
 #include <math.h>
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
-#include "config.h"
+#include "config/config.h"
 #include "drivers/motor.h"
 #include "drivers/encoder.h"
 #include "drivers/ir_line_follower.h"

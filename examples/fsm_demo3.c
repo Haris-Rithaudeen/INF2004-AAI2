@@ -4,19 +4,46 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <math.h>
-#include "config.h"
+#include "config/config.h"
 #include "drivers/motor.h"
 #include "drivers/encoder.h"
 #include "drivers/ir_line_follower.h"
 #include "drivers/magnetometer.h"
+#include "drivers/ultrasonic.h"
+#include "drivers/servo.h"
 #include "control/pid.h"
 #include "fsm.h"
 
 // ======================================================================
-// Line Following + IMU Smoothing - Maintains heading while following line
+// Line Following with Obstacle Detection and Avoidance
 // ======================================================================
 
-// ---- GPIO ISR ----
+// FSM States
+typedef enum {
+    STATE_LINE_FOLLOW,      // Following the line normally
+    STATE_SCAN_LEFT,        // Scanning left side
+    STATE_SCAN_RIGHT,       // Scanning right side
+    STATE_DECIDE_PATH,      // Deciding which way to go
+    STATE_AVOID_OBSTACLE    // Avoiding the obstacle
+} robot_state_t;
+
+static robot_state_t current_state = STATE_LINE_FOLLOW;
+
+// Obstacle detection parameters
+#define OBSTACLE_THRESHOLD_CM      20.0f
+#define SCAN_SAMPLES               3
+#define SERVO_CENTER_ANGLE         90
+#define SERVO_LEFT_ANGLE           45
+#define SERVO_RIGHT_ANGLE          135
+#define SERVO_SCAN_DELAY_MS        300
+#define WIDTH_CM_THRESH            30.0f
+#define SERVO_SWEEP_START_DEG      40
+#define SERVO_SWEEP_END_DEG        140
+#define SERVO_SWEEP_STEP_DEG       5
+#define SERVO_SWEEP_SETTLE_MS      120
+#define MIN_SPAN_DEG               6.0f
+
+// GPIO ISR
 static volatile bool g_toggle_dir_req = false;
 static volatile bool g_change_speed_req = false;
 static volatile uint32_t g_last_dir_ms = 0;
@@ -44,12 +71,13 @@ static void gpio_isr_unified(uint gpio, uint32_t events) {
     }
 }
 
-// ---- State ----
+// State
 static bool forward = true;
 static uint speed_pct = 25;
 static uint32_t last_print_ms = 0;
 static uint32_t last_control_ms = 0;
 static uint32_t last_sensor_print_ms = 0;
+static uint32_t state_enter_time = 0;
 
 static pid_t pid_r, pid_l, pid_line, pid_heading;
 
@@ -108,16 +136,21 @@ void fsm_init(void) {
     motor_init_all();
     encoder_init();
     ir_line_follower_init();
+    ultrasonic_init();
+    servo_init();
 
     // Initialize magnetometer
     if (!magnetometer_init()) {
-        printf("⚠️  WARNING: Magnetometer init failed! Running without IMU smoothing.\n");
+        printf("WARNING: Magnetometer init failed! Running without IMU smoothing.\n");
         imu_ready = false;
         startup_state = STATE_RUNNING;
     } else {
-        printf("✓ Magnetometer initialized (%d-sample moving average)\n", MAG_FILTER_SIZE);
+        printf("Magnetometer initialized (%d-sample moving average)\n", MAG_FILTER_SIZE);
         imu_ready = true;
     }
+
+    // Center the servo
+    servo_set_angle(SERVO_CENTER_ANGLE);
 
     gpio_init(BUTTON_DIR); gpio_set_dir(BUTTON_DIR, GPIO_IN); gpio_pull_up(BUTTON_DIR);
     gpio_init(BUTTON_SPD); gpio_set_dir(BUTTON_SPD, GPIO_IN); gpio_pull_up(BUTTON_SPD);
@@ -154,47 +187,27 @@ void fsm_init(void) {
     vel_window_start = now_ms();
     last_control_ms = vel_window_start;
     last_sensor_print_ms = vel_window_start;
+    state_enter_time = vel_window_start;
 
     printf("\n╔════════════════════════════════════════════════════════╗\n");
-    printf("║   LINE FOLLOWING WITH IMU SMOOTHING (MEMORY MODE)     ║\n");
+    printf("║   LINE FOLLOWING WITH OBSTACLE AVOIDANCE              ║\n");
     printf("╚════════════════════════════════════════════════════════╝\n\n");
     
-    printf("┌─ LINE FOLLOWING (MEMORY MODE) ──────────────────────┐\n");
-    printf("│ IR Sensor: GP%d (ADC ch%d)                          │\n", 
-           IR_LINE_ADC_GPIO, IR_LINE_ADC_CHANNEL);
-    printf("│ ✓ CALIBRATED Edge: %d - %d (Tgt: %.0f)            │\n", 
-           IR_LINE_EDGE_LOW_LIMIT, IR_LINE_EDGE_HIGH_LIMIT, IR_LINE_EDGE_TARGET);
-    printf("│ Sensor Filter: %.1f%% (smoothing)                   │\n", 
-           IR_SENSOR_FILTER_ALPHA * 100.0f);
-    printf("│ Base PID: Kp=%.4f Ki=%.4f Kd=%.3f                  │\n", 
-           LINE_FOLLOW_KP, LINE_FOLLOW_KI, LINE_FOLLOW_KD);
-    printf("│ Adaptive: 0.1× gentle → 1.25× aggressive           │\n");
-    printf("│ Memory Boost: Activates on prolonged white/black   │\n");
-    printf("│ Max Correction: %.0f%% | Max Speed: %d%%             │\n", 
-           LINE_CORRECTION_MAX, LINE_FOLLOW_MAX_SPEED);
-    printf("└──────────────────────────────────────────────────────┘\n\n");
-    
-    printf("┌─ IMU HEADING SMOOTHING ──────────────────────────────┐\n");
-    printf("│ Purpose: Compensate for wheel drift & wobble        │\n");
-    printf("│ Kp=%.2f Ki=%.2f Kd=%.2f (gentle)                │\n", 
-           HEADING_KP * 0.3f, HEADING_KI * 0.3f, HEADING_KD * 0.3f);
-    printf("│ Max Correction: ±%.0fmm/s | Deadzone: %.1f°        │\n", 
-           MAX_HEADING_CORRECTION * 0.5f, HEADING_DEADZONE);
-    printf("│ Status: %s                                          │\n",
-           imu_ready ? "READY" : "DISABLED");
+    printf("┌─ OBSTACLE DETECTION ─────────────────────────────────┐\n");
+    printf("│ Ultrasonic: GP%d (TRIG), GP%d (ECHO)                 │\n", 
+           ULTRASONIC_TRIG_GPIO, ULTRASONIC_ECHO_GPIO);
+    printf("│ Servo: GP%d                                           │\n", SERVO_GPIO);
+    printf("│ Detection threshold: %.1f cm                         │\n", OBSTACLE_THRESHOLD_CM);
+    printf("│ Scan angles: %d° (left) | %d° (center) | %d° (right)│\n",
+           SERVO_LEFT_ANGLE, SERVO_CENTER_ANGLE, SERVO_RIGHT_ANGLE);
     printf("└──────────────────────────────────────────────────────┘\n\n");
     
     if (imu_ready) {
-        printf("⏳ Warming up IMU filter (%d samples)...\n\n", IMU_WARMUP_SAMPLES);
+        printf("Warming up IMU filter (%d samples)...\n\n", IMU_WARMUP_SAMPLES);
     }
     
-    printf("💡 How it works:\n");
-    printf("   - Line sensor: PRIMARY control (dominates)\n");
-    printf("   - IMU: SECONDARY smoothing (gentle corrections)\n");
-    printf("   - Result: Smoother, steadier line following\n\n");
-    
     printf("Current Speed: %d%% | Max: %d%%\n", speed_pct, LINE_FOLLOW_MAX_SPEED);
-    printf("GP21=dir (lock heading) | GP20=speed\n");
+    printf("GP21=dir | GP20=speed\n");
     printf("========== READY ==========\n\n");
 }
 
@@ -242,6 +255,127 @@ static float feedforward_right(float target_mm_s) {
     return pwm;
 }
 
+typedef struct {
+    float left_cm, center_cm, right_cm;
+    float ref_range_cm;
+    float span_deg;
+    float est_width_mm;
+    int   chosen;
+} obs_scan_t;
+
+static inline bool us_ok(float d) { return !isnan(d) && d > 1.0f && d < 400.0f; }
+
+static float chord_width_mm(float range_cm, float span_deg) {
+    float d_m = fmaxf(range_cm, 1.0f) / 100.0f;
+    float rad = span_deg * (float)M_PI / 180.0f;
+    return 2.0f * d_m * tanf(rad * 0.5f) * 1000.0f;
+}
+
+#define US_BEAM_HALF_DEG 7.5f
+
+// Obstacle scan output
+static obs_scan_t scan_obstacle_and_width(void) {
+    obs_scan_t r = (obs_scan_t){0};
+
+    // Quick L/C/R probe
+    servo_set_angle(SERVO_LEFT_ANGLE);   sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.left_cm   = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+    servo_set_angle(SERVO_CENTER_ANGLE); sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.center_cm = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+    servo_set_angle(SERVO_RIGHT_ANGLE);  sleep_ms(SERVO_SCAN_DELAY_MS);
+    r.right_cm  = ultrasonic_measure_averaged_cm(SCAN_SAMPLES);
+
+    // Sweep & collect first/last edge samples
+    float first_deg = NAN, last_deg = NAN;
+    float d_first = NAN, d_last = NAN;
+    float d_min = NAN;
+
+    // Small helper to smooth each reading
+    auto float read_cm3(void) {
+        return ultrasonic_measure_averaged_cm(3);
+    }
+
+    bool in_band = false;
+    for (int a = SERVO_SWEEP_START_DEG; a <= SERVO_SWEEP_END_DEG; a += SERVO_SWEEP_STEP_DEG) {
+        servo_set_angle(a);
+        sleep_ms(SERVO_SWEEP_SETTLE_MS);
+        float d = read_cm3();
+
+        // “Near band” detection
+        bool ok = us_ok(d) && d <= WIDTH_CM_THRESH;
+
+        if (ok) {
+            if (!in_band) {
+                // Entering band
+                first_deg = (float)a;
+                d_first = d;
+                in_band = true;
+            }
+            last_deg = (float)a;
+            d_last = d;
+            if (isnan(d_min) || d < d_min) d_min = d;
+        } else if (in_band) {
+            // Leaving band
+            break;
+        }
+    }
+
+    // Recenter
+    servo_set_angle(SERVO_CENTER_ANGLE);
+    sleep_ms(SERVO_SCAN_DELAY_MS);
+
+    if (!isnan(first_deg) && !isnan(last_deg) && !isnan(d_first) && !isnan(d_last)) {
+        float span_deg = last_deg - first_deg;
+
+        // Compensate for cone
+        float span_adj_deg = span_deg - 2.0f * US_BEAM_HALF_DEG;
+        if (span_adj_deg < 0.0f) span_adj_deg = 0.0f;
+
+        r.span_deg = span_deg;
+        r.ref_range_cm = (d_first + d_last) * 0.5f;
+
+        // Law of cosines on the two edge points
+        float th = span_adj_deg * (float)M_PI / 180.0f;
+        float d1 = d_first / 100.0f;
+        float d2 = d_last  / 100.0f;
+        float chord_m = sqrtf(fmaxf(0.0f, d1*d1 + d2*d2 - 2.0f*d1*d2*cosf(th)));
+
+        // Convert to mm
+        r.est_width_mm = chord_m * 1000.0f;
+
+        float d_mean_m = (d1 + d2) * 0.5f;
+        float chord_quick_mm = 2.0f * d_mean_m * tanf(th * 0.5f) * 1000.0f;
+        if (!isnan(chord_quick_mm) && chord_quick_mm > 0.0f && r.est_width_mm > 1.5f * chord_quick_mm) {
+            r.est_width_mm = chord_quick_mm; // prevent extreme overestimates
+        }
+    } else {
+        r.span_deg = 0.0f;
+        r.est_width_mm = NAN;
+        r.ref_range_cm = d_min;
+    }
+
+    // Print results
+    printf(
+        "\n┌─ Obstacle Scan ────────────────────────────────\n"
+        "│ L:%6.1f cm   C:%6.1f cm   R:%6.1f cm\n",
+        r.left_cm, r.center_cm, r.right_cm
+    );
+    if (!isnan(r.est_width_mm)) {
+        printf("│ Span:%5.1f° (@~%4.1f cm) ⇒ width ≈ %4.0f mm\n",
+               r.span_deg, r.ref_range_cm, r.est_width_mm);
+    } else {
+        printf("│ Span:  —     (no contiguous near-span)\n");
+    }
+    const char* hint =
+        (us_ok(r.left_cm)  && r.left_cm  > OBSTACLE_THRESHOLD_CM*1.5f) ||
+        (us_ok(r.right_cm) && r.right_cm > OBSTACLE_THRESHOLD_CM*1.5f)
+            ? ((r.left_cm >= r.right_cm) ? "LEFT looks clearer" : "RIGHT looks clearer")
+            : "no clear side";
+    printf("│ Clearer side: %s\n", hint);
+    printf("└───────────────────────────────────────────────\n\n");
+    return r;
+}
+
 void fsm_step(void) {
     uint32_t now = now_ms();
     
@@ -259,8 +393,8 @@ void fsm_step(void) {
                 if (magnetometer_read_data(&mag_data)) {
                     imu_samples++;
                     if (imu_samples >= IMU_WARMUP_SAMPLES) {
-                        printf("✓ IMU filter ready\n");
-                        printf("⏳ Locking initial heading...\n");
+                        printf("IMU filter ready\n");
+                        printf("Locking initial heading...\n");
                         startup_state = STATE_HEADING_LOCK;
                     }
                 }
@@ -273,7 +407,7 @@ void fsm_step(void) {
                     target_heading = mag_data.heading;
                     heading_locked = true;
                     startup_state = STATE_RUNNING;
-                    printf("✓ Heading locked: %.1f° | System ready!\n\n", target_heading);
+                    printf("Heading locked: %.1f° | System ready!\n\n", target_heading);
                 }
                 break;
                 
@@ -297,8 +431,8 @@ void fsm_step(void) {
         ir_filtered = IR_LINE_EDGE_TARGET;
         white_time_start = 0;
         was_on_white = false;
+        current_state = STATE_LINE_FOLLOW;
         
-        // Lock new heading on direction change
         if (imu_ready && startup_state == STATE_RUNNING) {
             magnetometer_data_t mag_data;
             if (magnetometer_read_data(&mag_data)) {
@@ -315,6 +449,74 @@ void fsm_step(void) {
         g_change_speed_req = false;
         speed_pct = 25 + (rand() % 16);
         printf("\n>>> SPEED: %u%% (max %d%%) <<<\n\n", speed_pct, LINE_FOLLOW_MAX_SPEED);
+    }
+
+    // ========== OBSTACLE DETECTION FSM ==========
+    float obstacle_distance = ultrasonic_measure_cm();
+    
+    switch (current_state) {
+        case STATE_LINE_FOLLOW: {
+            // Check for obstacle ahead
+            if (!isnan(obstacle_distance) && obstacle_distance < OBSTACLE_THRESHOLD_CM) {
+                printf("\nOBSTACLE DETECTED at %.1f cm!\n", obstacle_distance);
+                motor_set_signed(0, 0);
+                current_state = STATE_DECIDE_PATH;
+                state_enter_time = now;
+                return;
+            }
+            
+            // Normal line following
+            // Read IR and continue...
+            break;
+        }
+        
+        case STATE_DECIDE_PATH: {
+        motor_set_signed(0, 0);
+
+        // Use the scanner
+        obs_scan_t S = scan_obstacle_and_width();
+
+        // Decision rule:
+        // 1) prefer the side with larger distance
+        // 2) if both clear, pick max distance
+        // 3) if both blocked, report none
+        bool left_clear  = us_ok(S.left_cm)  && S.left_cm  > OBSTACLE_THRESHOLD_CM * 1.5f;
+        bool right_clear = us_ok(S.right_cm) && S.right_cm > OBSTACLE_THRESHOLD_CM * 1.5f;
+
+        if (left_clear && right_clear) {
+            S.chosen = (S.left_cm >= S.right_cm) ? -1 : +1;
+        } else if (left_clear) {
+            S.chosen = -1;
+        } else if (right_clear) {
+            S.chosen = +1;
+        } else {
+            S.chosen = 0;
+        }
+
+        // Console feedback
+        if (S.chosen == -1) printf("Decision: LEFT side is clearer (%.1f cm)\n", S.left_cm);
+        else if (S.chosen == +1) printf("Decision: RIGHT side is clearer (%.1f cm)\n", S.right_cm);
+        else printf("Both sides blocked (L=%.1f, R=%.1f). Will hold course.\n", S.left_cm, S.right_cm);
+
+        // MQTT Telemetry
+        #ifdef mqtt_pub_eventf
+        mqtt_pub_eventf("robot/obstacle",
+                        "{ \"left_cm\":%.1f, \"center_cm\":%.1f, \"right_cm\":%.1f, "
+                        "\"span_deg\":%.1f, \"ref_cm\":%.1f, \"width_mm\":%.0f, \"chosen\":%d }",
+                        S.left_cm, S.center_cm, S.right_cm,
+                        S.span_deg, S.ref_range_cm, S.est_width_mm, S.chosen);
+        mqtt_pub_eventf("robot/status", "{ \"state\":\"DECIDE_PATH\" }");
+        #endif
+
+        current_state = STATE_LINE_FOLLOW;
+        state_enter_time = now;
+        printf("Resuming line following\n\n");
+        return;
+    }
+        
+        default:
+            current_state = STATE_LINE_FOLLOW;
+            break;
     }
 
     // ========== Read IR Sensor with SMOOTHING FILTER ==========
@@ -397,12 +599,11 @@ void fsm_step(void) {
     uint32_t stuck_duration = 0;
     const char* stuck_on = "";
     
-    if (white_duration > 500) {  // REDUCED from 400ms - react faster
+    if (white_duration > 500) {
         stuck_duration = white_duration;
         stuck_on = "WHITE";
-        // More aggressive boost formula: starts at 3× and ramps up quickly
         time_boost = 12.0f + ((white_duration - 100) / 200.0f);
-        if (time_boost > 30.0f) time_boost = 30.0f;  // Higher cap for emergency
+        if (time_boost > 30.0f) time_boost = 30.0f;
         
         adaptive_kp *= time_boost;
         pid_line.out_max = LINE_CORRECTION_MAX * time_boost;
@@ -411,7 +612,6 @@ void fsm_step(void) {
     else if (black_duration > 50) {
         stuck_duration = black_duration;
         stuck_on = "BLACK";
-        // Also more aggressive for black
         time_boost = 6.0f + ((black_duration - 50) / 150.0f);
         if (time_boost > 10.0f) time_boost = 10.0f;
         
@@ -438,7 +638,6 @@ void fsm_step(void) {
     float heading_error = 0.0f;
     bool imu_read_ok = false;
     
-    // Only update heading when on edge (stabilize, don't fight line corrections)
     if (imu_ready && heading_locked && startup_state == STATE_RUNNING && on_edge) {
         magnetometer_data_t mag_data;
         if (magnetometer_read_data(&mag_data)) {
@@ -446,10 +645,9 @@ void fsm_step(void) {
             heading_error = normalize_angle_error(target_heading - current_heading);
             imu_read_ok = true;
             
-            // Low-pass filter on heading error (heavy smoothing)
             static float filtered_heading_error = 0.0f;
             static bool filter_init = false;
-            const float alpha_heading = 0.2f;  // Very smooth
+            const float alpha_heading = 0.2f;
             
             if (!filter_init) {
                 filtered_heading_error = heading_error;
@@ -459,7 +657,6 @@ void fsm_step(void) {
                                         (1.0f - alpha_heading) * filtered_heading_error;
             }
             
-            // Only apply gentle correction when stable and outside deadzone
             if (fabsf(filtered_heading_error) > HEADING_DEADZONE * 2.0f && speed_pct > 20) {
                 heading_correction_mm_s = pid_update(&pid_heading, 0.0f, filtered_heading_error);
             } else {
@@ -485,6 +682,10 @@ void fsm_step(void) {
         printf("[IR] Raw:%4u→Filt:%4.0f | Err:%+4.0f | Kp×%.1f | LCorr:%+5.1f%% | %s%s",
                ir_raw, ir_filtered, line_error, 
                (adaptive_kp / LINE_FOLLOW_KP), line_correction, status, boost_indicator);
+        
+        if (!isnan(obstacle_distance)) {
+            printf(" | [US] %.1fcm", obstacle_distance);
+        }
         
         if (imu_read_ok && fabsf(heading_correction_mm_s) > 0.1f) {
             printf(" | [IMU] E:%+.1f° HCorr:%+.1f", heading_error, heading_correction_mm_s);
@@ -544,9 +745,6 @@ void fsm_step(void) {
     
     float base_target = target_mm_s_from_ui();
     
-    // Combine corrections (line dominates, IMU provides gentle smoothing)
-    // Line correction: WHITE → turn LEFT (+ left, - right)
-    // Heading correction: drift left → turn RIGHT (- left, + right)
     float target_l = base_target + line_correction - heading_correction_mm_s;
     float target_r = base_target - line_correction + heading_correction_mm_s;
     
@@ -591,54 +789,33 @@ void fsm_step(void) {
         
         uint effective_speed = speed_pct > LINE_FOLLOW_MAX_SPEED ? LINE_FOLLOW_MAX_SPEED : speed_pct;
         
-        printf("\n╔══════════════════════════════════════════════════════════╗\n");
-        printf("║ LINE + IMU MODE | Speed: %u%%→%u%% | %.1f mm/s %s       ║\n", 
-               speed_pct, effective_speed, base_target, forward ? "FWD" : "REV");
-        printf("╠══════════════════════════════════════════════════════════╣\n");
-        printf("║ LINE: Raw=%4u | Filt=%.0f | Err=%+.0f | Corr=%+.1f%%    ║\n",
+        printf("\n╔══════════════════════════════════════════════════════════════╗\n");
+        printf("║ STATE: %-20s | Speed: %u%%→%u%%              ║\n",
+               (current_state == STATE_LINE_FOLLOW) ? "LINE FOLLOWING" :
+               (current_state == STATE_DECIDE_PATH) ? "DECIDING PATH" : "UNKNOWN",
+               speed_pct, effective_speed);
+        printf("╠══════════════════════════════════════════════════════════════╣\n");
+        
+        if (!isnan(obstacle_distance)) {
+            printf("║ ULTRASONIC: %.1f cm %s                                  ║\n",
+                   obstacle_distance,
+                   (obstacle_distance < OBSTACLE_THRESHOLD_CM) ? "⚠️ BLOCKED" : "✓ CLEAR");
+        }
+        
+        printf("║ LINE: Raw=%4u | Filt=%.0f | Err=%+.0f | Corr=%+.1f%%       ║\n",
                ir_raw, ir_filtered, line_error, line_correction);
         
         if (imu_read_ok) {
-            printf("║ IMU:  H=%.1f°→%.1f° | Err=%+.1f° | Corr=%+.1fmm/s       ║\n",
+            printf("║ IMU:  H=%.1f°→%.1f° | Err=%+.1f° | Corr=%+.1fmm/s          ║\n",
                    current_heading, target_heading, heading_error, heading_correction_mm_s);
-            
-            if (fabsf(heading_correction_mm_s) < 0.5f) {
-                printf("║       Status: ✅ Stable (minimal IMU correction)          ║\n");
-            } else {
-                printf("║       Status: 🔄 Smoothing (compensating drift)           ║\n");
-            }
-        } else {
-            printf("║ IMU:  %s                                                  ║\n",
-                   imu_ready ? (on_edge ? "Monitoring..." : "Standby (off edge)") : "DISABLED");
         }
         
-        if (white_duration > 300 || black_duration > 50) {
-            printf("║ 🚨 MEMORY BOOST: %.1fs on %s | Boost: %.1f×             ║\n",
-                   stuck_duration / 1000.0f, stuck_on, time_boost);
-        }
-        
-        printf("╟──────────────────────────────────────────────────────────╢\n");
-        printf("║ L: Vel=%+5.1f | Tgt=%+5.1f | PWM=%+5.1f%% | Err=%+5.1f  ║\n", 
+        printf("╟──────────────────────────────────────────────────────────────╢\n");
+        printf("║ L: Vel=%+5.1f | Tgt=%+5.1f | PWM=%+5.1f%% | Err=%+5.1f     ║\n", 
                vel_l, target_l, pwm_l, err_l);
-        printf("║ R: Vel=%+5.1f | Tgt=%+5.1f | PWM=%+5.1f%% | Err=%+5.1f  ║\n", 
+        printf("║ R: Vel=%+5.1f | Tgt=%+5.1f | PWM=%+5.1f%% | Err=%+5.1f     ║\n", 
                vel_r, target_r, pwm_r, err_r);
-        printf("╟──────────────────────────────────────────────────────────╢\n");
-        
-        if (on_edge && fabsf(line_error) < 50.0f) {
-            printf("║ ✅ PERFECT - Smooth tracking with IMU assist!            ║\n");
-        } else if (on_edge) {
-            printf("║ 💡 On edge - following OK                                 ║\n");
-        } else {
-            if (ir_filtered < IR_LINE_EDGE_LOW_LIMIT) {
-                printf("║ ⚠️  Off line (WHITE) - Turning LEFT | Kp×%.1f            ║\n",
-                       (adaptive_kp / LINE_FOLLOW_KP));
-            } else {
-                printf("║ ⚠️  Off line (BLACK) - Turning RIGHT | Kp×%.1f           ║\n",
-                       (adaptive_kp / LINE_FOLLOW_KP));
-            }
-        }
-        
-        printf("╚══════════════════════════════════════════════════════════╝\n\n");
+        printf("╚══════════════════════════════════════════════════════════════╝\n");
         
         last_print_ms = now;
     }
