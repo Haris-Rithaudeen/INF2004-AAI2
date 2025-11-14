@@ -159,10 +159,10 @@ function processBarcode(data) {
         barCount: data.bars || 0
     };
     
-    updateElement('barcodeValue', data.barcode || 'No data');
+    updateElement('barcodeValue', data.barcode || ' ');
     updateElement('barCount', data.bars || 0);
     
-    if (data.barcode && data.barcode !== 'No data') {
+    if (data.barcode && data.barcode !== ' ') {
         addEventLog('info', `Barcode scanned: ${data.barcode}`);
         addCommandHistory(data.barcode);
     }

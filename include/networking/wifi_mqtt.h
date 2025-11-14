@@ -29,8 +29,8 @@
 
 #define MQTT_BROKER_PORT        1883
 #define MQTT_CLIENT_ID          "pico_w_robot"
-#define MQTT_PUB_TOPIC          "robot/telemetry"
-#define MQTT_SUB_TOPIC          "robot/commands"
+#define MQTT_PUB_TOPIC          "robot/sensors"
+#define MQTT_SUB_TOPIC          "robot/sensors"
 #define MQTT_PING_INTERVAL_MS   3000
 #define MQTT_MAX_RECONNECT      3
 

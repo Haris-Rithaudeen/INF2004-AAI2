@@ -39,7 +39,13 @@
     "raspberry-pi-pico.ninjaPath": "${HOME}/.pico-sdk/ninja/v1.12.1/ninja",
     "files.associations": {
         "compare": "cpp",
-        "cstdint": "cpp"
+        "cstdint": "cpp",
+        "stdio.h": "c",
+        "wifi_mqtt.h": "c",
+        "motor.h": "c",
+        "ultrasonic.h": "c",
+        "magnetometer.h": "c",
+        "stdlib.h": "c"
     },
     "liveServer.settings.port": 5501
 }
